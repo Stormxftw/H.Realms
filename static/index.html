@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes Game Host Console</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>Hermes Game Host Console <span class="purple">✦</span></h1>
+    <div class="sub">Optional local add-on for Hermes Agent: read-only telemetry for hosted game servers. Keep this off the public internet.</div>
+  </div>
+  <span id="overallStatus" class="pill">Loading…</span>
+</header>
+
+<main class="wrap">
+  <div class="toolbar">
+    <span class="pill">Read-only mode</span>
+    <span class="pill">LAN dashboard</span>
+    <span class="pill">No restart controls</span>
+  </div>
+
+  <section class="grid metrics-row">
+    <div class="card metric-card"><div class="label">Minecraft players</div><div class="metric accent" id="mcPlayers">—</div></div>
+    <div class="card metric-card"><div class="label">Minecraft version</div><div class="metric purple" id="mcVersion">—</div></div>
+    <div class="card metric-card"><div class="label">Java memory</div><div class="metric" id="mcMem">—</div></div>
+    <div class="card metric-card"><div class="label">WSL load</div><div class="metric warn" id="load1">—</div></div>
+  </section>
+
+  <section class="row">
+    <div class="card service-card" id="minecraftCard">
+      <div class="card-head">
+        <div>
+          <div class="label">Minecraft Java</div>
+          <h2 id="mcName">Minecraft</h2>
+        </div>
+        <span class="badge" id="mcBadge">checking</span>
+      </div>
+      <div class="details-grid">
+        <div><div class="label">Uptime</div><strong id="mcUptime">—</strong></div>
+        <div><div class="label">Public</div><code id="mcPublic">—</code></div>
+        <div><div class="label">LAN</div><code id="mcLan">—</code></div>
+      </div>
+      <h3>Online players</h3>
+      <div class="players" id="mcPlayerList"></div>
+    </div>
+
+    <div class="card service-card" id="palworldCard">
+      <div class="card-head">
+        <div>
+          <div class="label">Palworld</div>
+          <h2>Palworld</h2>
+        </div>
+        <span class="badge" id="palBadge">checking</span>
+      </div>
+      <div class="details-grid two">
+        <div><div class="label">Process</div><strong id="palProcess">—</strong></div>
+        <div><div class="label">UDP ports</div><strong id="palPorts">—</strong></div>
+      </div>
+      <div class="connect-list"><code id="palPublic">—</code><code id="palLan">—</code></div>
+    </div>
+  </section>
+
+  <section class="row">
+    <div class="card">
+      <div class="card-head"><div><div class="label">Host</div><h2>Box health</h2></div><span class="badge ok">live</span></div>
+      <div class="details-grid two"><div><div class="label">WSL RAM</div><strong id="wslMem">—</strong></div><div><div class="label">Dashboard</div><strong>local add-on</strong></div></div>
+      <div class="bar-list" id="diskBars"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><div class="label">Backups</div><h2>Freshness</h2></div></div>
+      <div class="backup-list" id="backups"></div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:16px">
+    <div class="card-head"><div><div class="label">Events</div><h2>Minecraft log pulse</h2></div><span class="pill" id="updatedAt">—</span></div>
+    <div class="logs" id="mcLog"></div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
