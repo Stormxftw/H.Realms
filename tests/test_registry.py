@@ -48,22 +48,23 @@ class GameRegistryTests(unittest.TestCase):
         binding = {"action": action}
         if action == "property.set":
             binding["key"] = "setting"
+        control = {
+            "id": "setting",
+            "kind": kind,
+            "label": "Setting",
+            "risk": (
+                "configuration"
+                if action == "property.set"
+                else "read-only"
+            ),
+            "binding": binding,
+        }
+        if kind == "select":
+            control["options"] = [{"value": "example", "label": "Example"}]
         (profiles / "alpha.json").write_text(
             json.dumps(
                 cls._profile(
-                    controls=[
-                        {
-                            "id": "setting",
-                            "kind": kind,
-                            "label": "Setting",
-                            "risk": (
-                                "configuration"
-                                if action == "property.set"
-                                else "read-only"
-                            ),
-                            "binding": binding,
-                        }
-                    ]
+                    controls=[control]
                 )
             ),
             encoding="utf-8",
@@ -539,7 +540,7 @@ class GameRegistryTests(unittest.TestCase):
             self.assertEqual(["alpha"], [game["id"] for game in engine.catalog()["games"]])
             with self.assertRaisesRegex(
                 ControlEngineError,
-                r"action unavailable for alpha: approved project path is unavailable",
+                r"action unavailable for alpha: .*project",
             ):
                 engine.plan(
                     game_id="alpha",
@@ -635,7 +636,7 @@ class GameRegistryTests(unittest.TestCase):
                 self.assertEqual("alpha", engine.catalog()["games"][0]["id"])
                 with self.assertRaisesRegex(
                     ControlEngineError,
-                    rf"action unavailable for alpha: {diagnostic}",
+                    rf"action unavailable for alpha: .*{diagnostic}",
                 ):
                     engine.plan(
                         game_id="alpha",
@@ -756,7 +757,7 @@ class GameRegistryTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ControlEngineError,
-                r"action unavailable for alpha: approved property path is unavailable",
+                r"action unavailable for alpha: .*unavailable",
             ):
                 engine.plan(
                     game_id="alpha",

@@ -20,7 +20,12 @@
       "statusCollector": "minecraft_ping",
       "processSearch": "server.jar nogui",
       "defaultPort": 25565,
-      "portProtocol": "tcp"
+      "portProtocol": "tcp",
+      "requiredPaths": [
+        {"path": "server.jar", "kind": "binary", "type": "file"},
+        {"path": "server.properties", "kind": "config", "type": "file"},
+        {"path": "world", "kind": "world", "type": "directory"}
+      ]
     },
     "palworld": {
       "projectDir": "palworld-server-local",
@@ -33,7 +38,15 @@
       "statusCollector": "process_only",
       "processSearch": "PalServer-Linux-Shipping",
       "defaultPort": 8211,
-      "portProtocol": "udp"
+      "portProtocol": "udp",
+      "additionalPorts": [
+        {"name": "query", "port": 27015, "protocol": "udp"}
+      ],
+      "requiredPaths": [
+        {"path": "Pal/Binaries/Linux/PalServer-Linux-Shipping", "kind": "binary", "type": "file"},
+        {"path": "Pal/Saved/Config/LinuxServer/PalWorldSettings.ini", "kind": "config", "type": "file"},
+        {"path": "Pal/Saved/SaveGames", "kind": "save", "type": "directory"}
+      ]
     },
     "valheim": {
       "projectDir": "valheim-server",
@@ -47,6 +60,10 @@
       "processSearch": "valheim_server.x86_64",
       "defaultPort": 2456,
       "portProtocol": "udp",
+      "queryPort": 2457,
+      "additionalPorts": [
+        {"name": "query", "port": 2457, "protocol": "udp"}
+      ],
       "steamAppId": 896660,
       "notes": "SteamCMD anonymous login supported. World name and password in start.sh."
     },
@@ -121,6 +138,10 @@
       "processSearch": "enshrouded_server",
       "defaultPort": 15636,
       "portProtocol": "udp",
+      "queryPort": 15637,
+      "additionalPorts": [
+        {"name": "query", "port": 15637, "protocol": "udp"}
+      ],
       "steamAppId": 2278520,
       "notes": "SteamCMD anonymous login supported. Uses UE5, needs decent hardware. Query port is game port + 1."
     },
@@ -136,6 +157,10 @@
       "processSearch": "SonsOfTheForestDS",
       "defaultPort": 8766,
       "portProtocol": "udp",
+      "queryPort": 8769,
+      "additionalPorts": [
+        {"name": "query", "port": 8769, "protocol": "udp"}
+      ],
       "steamAppId": 2465200,
       "notes": "SteamCMD anonymous login supported. Query port is game port + 3."
     }

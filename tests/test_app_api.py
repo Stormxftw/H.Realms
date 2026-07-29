@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -218,6 +219,58 @@ class ControlApiTests(unittest.TestCase):
                             port, "GET", "/api/controls", host_header=host_header
                         )
                         self.assertEqual(200, status)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+    def test_catalog_and_status_expose_truthful_policy_and_missing_install(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects, profiles, _properties, adapter_path = _write_disposable_control_tree(root)
+            shutil.rmtree(projects / "minecraft-server")
+
+            def collect(**kwargs):
+                self.assertFalse(kwargs["readiness"]["projectPresent"])
+                return {
+                    "id": kwargs["game_id"],
+                    "name": kwargs["name"],
+                    "state": "not_installed",
+                    "online": False,
+                    "process": {"ok": True, "running": False, "error": None},
+                    "listeners": [],
+                    "query": {"attempted": False, "ok": None, "error": None},
+                    "connect": {"local": None, "lan": None, "public": None},
+                }
+
+            server = app.create_server(
+                host="127.0.0.1",
+                port=0,
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+                telemetry_collector=collect,
+                lan_address=None,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                with urllib.request.urlopen(f"{base}/api/controls", timeout=3) as response:
+                    catalog = json.load(response)
+                with urllib.request.urlopen(f"{base}/api/status", timeout=3) as response:
+                    status = json.load(response)
+
+                for payload in (catalog, status):
+                    self.assertEqual("preview-confirm-audit", payload["controlPolicy"])
+                    self.assertTrue(payload["mutationsEnabled"])
+                    self.assertFalse(payload["readOnly"])
+                self.assertEqual("needs_setup", catalog["games"][0]["readiness"])
+                service = status["services"]["minecraft"]
+                self.assertEqual("not_installed", service["state"])
+                self.assertEqual("needs_setup", service["readiness"])
+                self.assertEqual("project_missing", service["blockers"][0]["code"])
             finally:
                 server.shutdown()
                 server.server_close()

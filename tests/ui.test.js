@@ -27,6 +27,35 @@ assert.equal(ui.isControlEnabled({ enabledWhen: 'online' }, true), true);
 assert.equal(ui.isControlEnabled({ enabledWhen: 'online' }, false), false);
 assert.equal(ui.isControlEnabled({ enabledWhen: 'offline' }, false), true);
 assert.equal(ui.isControlEnabled({ enabledWhen: 'offline' }, true), false);
+assert.equal(ui.isControlEnabled({ disabled: true }, true), false);
+
+assert.deepEqual(
+  ui.statusPresentation(
+    {
+      readiness: 'needs_setup',
+      blockers: [{ message: 'Install the dedicated server binary.' }],
+    },
+    { state: 'not_installed' },
+  ),
+  {
+    state: 'not_installed',
+    label: 'SETUP NEEDED',
+    tone: 'setup',
+    reasons: ['Install the dedicated server binary.'],
+  },
+);
+assert.deepEqual(
+  ui.statusPresentation(
+    { readiness: 'ready', blockers: [] },
+    {
+      state: 'running_degraded',
+      process: { ok: true, running: true, error: null },
+      listeners: [{ ok: false, error: 'ss unavailable' }],
+      query: { attempted: true, ok: false, error: 'query timed out' },
+    },
+  ).reasons,
+  ['ss unavailable', 'query timed out'],
+);
 
 const copy = ui.confirmationCopy({
   gameName: 'Minecraft Java',
