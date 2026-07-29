@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, os, re, shutil, socket, struct, subprocess, time, urllib.request
+import argparse, ipaddress, json, os, re, shutil, socket, struct, subprocess, time, urllib.request
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -10,7 +10,6 @@ from control_engine import ControlEngine, ControlEngineError
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-DOWNLOADS = ROOT / "downloads"
 PROJECTS_ROOT = Path(os.environ.get("HERMES_PROJECTS_ROOT", str(ROOT.parent))).expanduser().resolve()
 PROFILES_DIR = Path(os.environ.get("GAME_HOST_PROFILES_DIR", str(ROOT / "game_profiles"))).expanduser().resolve()
 ADAPTER_CONFIG_PATH = Path(os.environ.get("GAME_HOST_ADAPTER_CONFIG", str(ROOT / "game_adapters.json"))).expanduser().resolve()
@@ -18,7 +17,9 @@ AUDIT_PATH = Path(os.environ.get("GAME_HOST_AUDIT_PATH", str(ROOT / "data" / "co
 MINECRAFT_DIR = PROJECTS_ROOT / "minecraft-server"
 PALWORLD_DIR = PROJECTS_ROOT / "palworld-server-local"
 DEFAULT_PORT = int(os.environ.get("DASHBOARD_PORT", "5057"))
-DEFAULT_HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
+DEFAULT_HOST = "127.0.0.1"
+LOCAL_ACTOR = "local-console"
+BRIDGE_ACTOR = "hermes-authenticated-bridge"
 CACHE: dict[str, tuple[float, Any]] = {}
 
 def iso(epoch: float | None = None) -> str:
@@ -472,8 +473,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, dashboard_data())
             elif self.path == "/api/controls":
                 self.send_json(200, self.control_engine.catalog())
-            elif self.path == "/project-zim-architecture-inventory.zip":
-                self.send_file(DOWNLOADS / "project-zim-architecture-inventory.zip", "application/zip")
             elif self.path == "/static/app.css":
                 self.send_file(STATIC / "app.css", "text/css; charset=utf-8")
             elif self.path == "/static/app.js":
@@ -488,21 +487,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             body = self.read_json()
-            if self.path == "/api/control/plan":
+            plan_actors = {
+                "/api/control/plan": LOCAL_ACTOR,
+                "/api/bridge/control/plan": BRIDGE_ACTOR,
+            }
+            apply_actors = {
+                "/api/control/apply": LOCAL_ACTOR,
+                "/api/bridge/control/apply": BRIDGE_ACTOR,
+            }
+            if self.path in plan_actors:
                 result = self.control_engine.plan(
                     game_id=str(body.get("gameId", "")),
                     control_id=str(body.get("controlId", "")),
                     value=body.get("value"),
-                    actor=str(body.get("actor") or "dashboard"),
+                    actor=plan_actors[self.path],
                 )
                 self.send_json(200, result)
-            elif self.path == "/api/control/apply":
+            elif self.path in apply_actors:
                 digest = body.get("planDigest")
+                if not isinstance(digest, str) or not digest.strip():
+                    raise ControlEngineError("planDigest is required")
                 result = self.control_engine.apply(
                     plan_id=str(body.get("planId", "")),
-                    actor=str(body.get("actor") or "dashboard"),
+                    actor=apply_actors[self.path],
                     confirmed=body.get("confirmed") is True,
-                    plan_digest=None if digest is None else str(digest),
+                    plan_digest=digest,
                 )
                 self.send_json(200, result)
             else:
@@ -511,6 +520,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
             self.send_json(500, {"error": str(exc), "generatedAt": iso()})
+
+
+def require_loopback_host(host: str) -> str:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError("host must be a loopback IP address") from exc
+    if not address.is_loopback:
+        raise ValueError("host must be a loopback IP address")
+    return host
 
 
 def create_server(
@@ -522,6 +541,7 @@ def create_server(
     audit_path: Path = AUDIT_PATH,
     adapter_config_path: Path | None = None,
 ) -> ThreadingHTTPServer:
+    require_loopback_host(host)
     cfg_path = adapter_config_path or ADAPTER_CONFIG_PATH
     server = ThreadingHTTPServer((host, port), Handler)
     server.control_engine = ControlEngine(  # type: ignore[attr-defined]
