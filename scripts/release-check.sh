@@ -26,6 +26,9 @@ REQUIRED_RELEASE_ARTIFACTS=(
   control_engine.py
   telemetry.py
   registry.py
+  operations.py
+  restart_state.py
+  data/schema.sql
   game_adapters.json
   static/index.html
   static/app.css
@@ -53,6 +56,8 @@ REQUIRED_RELEASE_ARTIFACTS=(
   tests/test_plugin_api.py
   tests/test_readiness.py
   tests/test_telemetry.py
+  tests/test_operations.py
+  tests/test_restart_state.py
   tests/ui.test.js
   tests/desktop_plugin.test.js
   tests/tsconfig.desktop-plugin.json
