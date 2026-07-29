@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import stat
@@ -58,6 +59,15 @@ REQUIRED_RELEASE_ARTIFACTS = (
     "uninstall-hermes-plugin.sh",
 )
 
+REQUIRED_EXECUTABLE_ARTIFACTS = (
+    "scripts/release-check.sh",
+    "start.sh",
+    "status.sh",
+    "stop.sh",
+    "install-hermes-plugin.sh",
+    "uninstall-hermes-plugin.sh",
+)
+
 CATEGORY_SENTINELS = {
     "dependency manifest": "pyproject.toml",
     "Python source": "app.py",
@@ -77,7 +87,6 @@ CATEGORY_SENTINELS = {
     "profiles/terraria": "game_profiles/terraria.json",
     "profiles/valheim": "game_profiles/valheim.json",
     "tests": "tests/ui.test.js",
-    "release scripts": "scripts/release-check.sh",
     "lifecycle scripts": "start.sh",
 }
 
@@ -105,6 +114,45 @@ class ReleaseScaffoldTests(unittest.TestCase):
             {"jsonschema"},
             dependency_names(project["optional-dependencies"]["test"]),
         )
+
+    def test_desktop_plugin_compiler_rejects_jsdoc_type_violations(self):
+        tsc = Path(
+            os.environ.get(
+                "TSC_BIN",
+                Path.home() / ".hermes" / "hermes-agent" / "node_modules" / ".bin" / "tsc",
+            )
+        )
+        self.assertTrue(tsc.is_file(), f"TypeScript compiler not found: {tsc}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            probe_root = Path(tmp)
+            probe = probe_root / "type-violation.js"
+            probe.write_text(
+                "/** @type {number} */\nconst releaseTypeProbe = 'not a number'\n"
+                "void releaseTypeProbe\n",
+                encoding="utf-8",
+            )
+            config = probe_root / "tsconfig.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "extends": str(ROOT / "tests" / "tsconfig.desktop-plugin.json"),
+                        "files": [str(probe)],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [str(tsc), "--project", str(config), "--noEmit", "--pretty", "false"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode, "checkJs must reject explicit JSDoc violations")
+            self.assertIn("not assignable to type 'number'", result.stdout + result.stderr)
 
     def test_gitignore_covers_generated_artifacts_without_hiding_sources(self):
         generated = (
@@ -150,7 +198,7 @@ class ReleaseScaffoldTests(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode, f"source path is hidden: {relative}")
 
     @contextmanager
-    def release_fixture(self, *, leave_untracked: str | None = None):
+    def release_fixture(self, *, omit_artifact: str | None = None):
         self.assertTrue(RELEASE_CHECK.is_file(), "scripts/release-check.sh must exist")
         real_git = shutil.which("git")
         real_tar = shutil.which("tar")
@@ -158,18 +206,23 @@ class ReleaseScaffoldTests(unittest.TestCase):
         self.assertIsNotNone(real_tar)
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            temp_root = Path(tmp)
+            root = temp_root / "repo"
+            root.mkdir()
             for relative in REQUIRED_RELEASE_ARTIFACTS:
+                if relative == omit_artifact:
+                    continue
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if relative == "scripts/release-check.sh":
                     target.write_bytes(RELEASE_CHECK.read_bytes())
-                    target.chmod(target.stat().st_mode | stat.S_IXUSR)
                 else:
                     target.write_text(f"fixture for {relative}\n", encoding="utf-8")
+                if relative in REQUIRED_EXECUTABLE_ARTIFACTS:
+                    target.chmod(target.stat().st_mode | stat.S_IXUSR)
 
             subprocess.run([real_git, "init", "-q"], cwd=root, check=True)
-            tracked = [path for path in REQUIRED_RELEASE_ARTIFACTS if path != leave_untracked]
+            tracked = [path for path in REQUIRED_RELEASE_ARTIFACTS if path != omit_artifact]
             subprocess.run([real_git, "add", "--", *tracked], cwd=root, check=True)
             subprocess.run(
                 [
@@ -186,13 +239,16 @@ class ReleaseScaffoldTests(unittest.TestCase):
                 check=True,
             )
 
-            fake_log = root / "fake-tools.log"
-            tool_dir = root / "fake-tools"
+            fake_log = temp_root / "fake-tools.log"
+            tool_dir = temp_root / "fake-tools"
             tool_dir.mkdir()
             shim = """#!/usr/bin/env bash
 set -eu
 tool="$(basename "$0")"
 printf '%s:%s\\n' "$tool" "$*" >> "$FAKE_LOG"
+if [[ -n "${FAKE_MUTATE_MATCH:-}" && "$tool:$*" == *"$FAKE_MUTATE_MATCH"* ]]; then
+  printf '\\nchanged during checks\\n' >> "$FAKE_MUTATE_PATH"
+fi
 if [[ -n "${FAKE_FAIL_MATCH:-}" && "$tool:$*" == *"$FAKE_FAIL_MATCH"* ]]; then
   exit 19
 fi
@@ -240,6 +296,94 @@ exit 0
             self.assertNotIn("node:tests/desktop_plugin.test.js", calls)
             self.assertNotIn("hermes-python:", calls)
 
+    def assert_dirty_source_rejected(
+        self,
+        *,
+        relative: str,
+        content: str,
+        stage: bool,
+    ) -> None:
+        with self.release_fixture() as (root, env, fake_log):
+            source_path = root / relative
+            source_path.write_text(content, encoding="utf-8")
+            if stage:
+                subprocess.run([env["REAL_GIT"], "add", "--", relative], cwd=root, check=True)
+
+            result = subprocess.run(
+                [str(root / "scripts" / "release-check.sh")],
+                cwd=root.parent,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("release source tree must be clean", result.stderr)
+            self.assertIn(relative, result.stderr)
+            calls = fake_log.read_text(encoding="utf-8")
+            self.assertIn("git:status --porcelain=v1 --untracked-files=all --ignored=no", calls)
+            self.assertNotIn("python:", calls, "checks must not run against mixed source bytes")
+
+    def test_release_check_rejects_staged_source_bytes_before_checks(self):
+        self.assert_dirty_source_rejected(
+            relative="app.py",
+            content="valid staged bytes\n",
+            stage=True,
+        )
+
+    def test_release_check_rejects_unstaged_source_bytes_before_checks(self):
+        self.assert_dirty_source_rejected(
+            relative="app.py",
+            content="different unstaged bytes\n",
+            stage=False,
+        )
+
+    def test_release_check_rejects_untracked_source_before_checks(self):
+        self.assert_dirty_source_rejected(
+            relative="new-source.py",
+            content="untracked source bytes\n",
+            stage=False,
+        )
+
+    def test_release_check_cleans_archive_tempdir_when_archive_creation_fails(self):
+        with self.release_fixture() as (root, env, _):
+            release_tmp = root.parent / "release-tmp"
+            release_tmp.mkdir()
+            env["TMPDIR"] = str(release_tmp)
+            env["FAKE_FAIL_MATCH"] = "git:archive --format=tar"
+
+            result = subprocess.run(
+                [str(root / "scripts" / "release-check.sh")],
+                cwd=root.parent,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual([], list(release_tmp.glob("game-host-release-check.*")))
+
+    def test_release_check_rejects_source_changed_during_checks_before_archiving(self):
+        with self.release_fixture() as (root, env, fake_log):
+            env["FAKE_MUTATE_MATCH"] = "python:-m unittest discover"
+            env["FAKE_MUTATE_PATH"] = str(root / "app.py")
+
+            result = subprocess.run(
+                [str(root / "scripts" / "release-check.sh")],
+                cwd=root.parent,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("release source tree must be clean", result.stderr)
+            calls = fake_log.read_text(encoding="utf-8")
+            self.assertNotIn("git:archive", calls)
+
     def test_release_check_runs_canonical_checks_in_order_from_another_cwd(self):
         with self.release_fixture() as (root, env, fake_log):
             result = subprocess.run(
@@ -270,10 +414,49 @@ exit 0
                 self.assertLess(cursor, len(calls), f"missing canonical call: {expected}")
                 cursor += 1
 
+    def test_release_check_discovers_hermes_tools_from_home(self):
+        with self.release_fixture() as (root, env, fake_log):
+            fake_home = root.parent / "portable-home"
+            home_python = fake_home / ".hermes" / "hermes-agent" / "venv" / "bin" / "python"
+            home_tsc = fake_home / ".hermes" / "hermes-agent" / "node_modules" / ".bin" / "tsc"
+            for tool, label in (
+                (home_python, "home-hermes-python"),
+                (home_tsc, "home-tsc"),
+            ):
+                tool.parent.mkdir(parents=True, exist_ok=True)
+                tool.write_text(
+                    "#!/usr/bin/env bash\n"
+                    f"printf '{label}:%s\\n' \"$*\" >> \"$FAKE_LOG\"\n",
+                    encoding="utf-8",
+                )
+                tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+
+            env["HOME"] = str(fake_home)
+            del env["HERMES_PYTHON"]
+            del env["TSC_BIN"]
+
+            result = subprocess.run(
+                [str(root / "scripts" / "release-check.sh")],
+                cwd=root.parent,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            calls = fake_log.read_text(encoding="utf-8")
+            self.assertIn("home-hermes-python:-m unittest tests.test_plugin_api -v", calls)
+            self.assertIn(
+                "home-tsc:--project tests/tsconfig.desktop-plugin.json --noEmit --pretty false",
+                calls,
+            )
+            self.assertNotIn("/home/zim", RELEASE_CHECK.read_text(encoding="utf-8"))
+
     def test_release_archive_requires_every_v1_artifact_category(self):
         for category, sentinel in CATEGORY_SENTINELS.items():
             with self.subTest(category=category, sentinel=sentinel):
-                with self.release_fixture(leave_untracked=sentinel) as (root, env, _):
+                with self.release_fixture(omit_artifact=sentinel) as (root, env, _):
                     result = subprocess.run(
                         [str(root / "scripts" / "release-check.sh")],
                         cwd=root,
@@ -286,6 +469,50 @@ exit 0
                     self.assertNotEqual(0, result.returncode)
                     self.assertIn(
                         f"missing required tracked release artifact: {sentinel}",
+                        result.stderr,
+                    )
+
+    def test_release_archive_requires_lifecycle_scripts_to_be_executable(self):
+        for relative in REQUIRED_EXECUTABLE_ARTIFACTS:
+            with self.subTest(relative=relative):
+                with self.release_fixture() as (root, env, _):
+                    subprocess.run(
+                        [env["REAL_GIT"], "update-index", "--chmod=-x", "--", relative],
+                        cwd=root,
+                        check=True,
+                    )
+                    script_path = root / relative
+                    script_path.chmod(
+                        script_path.stat().st_mode
+                        & ~(stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                    )
+                    subprocess.run(
+                        [
+                            env["REAL_GIT"],
+                            "-c",
+                            "user.name=Release Scaffold Test",
+                            "-c",
+                            "user.email=release-scaffold@example.invalid",
+                            "commit",
+                            "-qm",
+                            "remove executable bit",
+                        ],
+                        cwd=root,
+                        check=True,
+                    )
+
+                    result = subprocess.run(
+                        ["bash", str(root / "scripts" / "release-check.sh")],
+                        cwd=root.parent,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(
+                        f"required release executable is not executable in git archive: {relative}",
                         result.stderr,
                     )
 

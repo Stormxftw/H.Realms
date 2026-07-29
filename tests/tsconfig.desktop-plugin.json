@@ -2,7 +2,7 @@
   "extends": "/home/zim/.hermes/hermes-agent/apps/desktop/tsconfig.json",
   "compilerOptions": {
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "noEmit": true,
     "skipLibCheck": true,
     "typeRoots": ["/home/zim/.hermes/hermes-agent/node_modules/@types"]
