@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "1.0",
+  "id": "palworld",
+  "name": "Palworld",
+  "description": "Linux dedicated-server controls. Live settings remain locked until a typed Palworld settings adapter is added.",
+  "icon": "Gamepad2",
+  "controls": [
+    {
+      "id": "refresh",
+      "kind": "button",
+      "label": "Refresh status",
+      "group": "Operations",
+      "risk": "read-only",
+      "variant": "outline",
+      "binding": { "action": "ui.refresh" }
+    },
+    {
+      "id": "start",
+      "kind": "button",
+      "label": "Start server",
+      "group": "Operations",
+      "risk": "service",
+      "enabledWhen": "offline",
+      "binding": { "action": "service.start" }
+    },
+    {
+      "id": "stop",
+      "kind": "button",
+      "label": "Stop server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "help": "Stops the Palworld Linux process. Use only after confirming no players are active.",
+      "binding": { "action": "service.stop" }
+    },
+    {
+      "id": "restart",
+      "kind": "button",
+      "label": "Restart server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "binding": { "action": "service.restart" }
+    },
+    {
+      "id": "game-port",
+      "kind": "readonly",
+      "label": "Game port",
+      "group": "Network",
+      "risk": "read-only",
+      "value": 8211,
+      "unit": "UDP",
+      "binding": { "action": "ui.refresh" }
+    },
+    {
+      "id": "query-port",
+      "kind": "readonly",
+      "label": "Query port",
+      "group": "Network",
+      "risk": "read-only",
+      "value": 27015,
+      "unit": "UDP",
+      "binding": { "action": "ui.refresh" }
+    }
+  ]
+}

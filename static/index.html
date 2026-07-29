@@ -1,85 +1,126 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>Hermes Game Host Console</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header class="topbar">
-  <div>
-    <h1>Hermes Game Host Console <span class="purple">✦</span></h1>
-    <div class="sub">Optional local add-on for Hermes Agent: read-only telemetry for hosted game servers. Keep this off the public internet.</div>
-  </div>
-  <span id="overallStatus" class="pill">Loading…</span>
-</header>
-
-<main class="wrap">
-  <div class="toolbar">
-    <span class="pill">Read-only mode</span>
-    <span class="pill">LAN dashboard</span>
-    <span class="pill">No restart controls</span>
-  </div>
-
-  <section class="grid metrics-row">
-    <div class="card metric-card"><div class="label">Minecraft players</div><div class="metric accent" id="mcPlayers">—</div></div>
-    <div class="card metric-card"><div class="label">Minecraft version</div><div class="metric purple" id="mcVersion">—</div></div>
-    <div class="card metric-card"><div class="label">Java memory</div><div class="metric" id="mcMem">—</div></div>
-    <div class="card metric-card"><div class="label">WSL load</div><div class="metric warn" id="load1">—</div></div>
-  </section>
-
-  <section class="row">
-    <div class="card service-card" id="minecraftCard">
-      <div class="card-head">
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">H</div>
         <div>
-          <div class="label">Minecraft Java</div>
-          <h2 id="mcName">Minecraft</h2>
+          <strong>Hermes Game Host Console</strong>
+          <span>Typed controls for dedicated servers</span>
         </div>
-        <span class="badge" id="mcBadge">checking</span>
       </div>
-      <div class="details-grid">
-        <div><div class="label">Uptime</div><strong id="mcUptime">—</strong></div>
-        <div><div class="label">Public</div><code id="mcPublic">—</code></div>
-        <div><div class="label">LAN</div><code id="mcLan">—</code></div>
-      </div>
-      <h3>Online players</h3>
-      <div class="players" id="mcPlayerList"></div>
-    </div>
-
-    <div class="card service-card" id="palworldCard">
-      <div class="card-head">
-        <div>
-          <div class="label">Palworld</div>
-          <h2>Palworld</h2>
+      <div class="topbar-actions">
+        <div class="connection-pill" aria-live="polite">
+          <span id="gateway-dot" class="status-dot loading"></span>
+          <span id="gateway-text">Connecting</span>
         </div>
-        <span class="badge" id="palBadge">checking</span>
+        <button id="refresh-button" class="button outline compact" type="button">Refresh</button>
       </div>
-      <div class="details-grid two">
-        <div><div class="label">Process</div><strong id="palProcess">—</strong></div>
-        <div><div class="label">UDP ports</div><strong id="palPorts">—</strong></div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" aria-label="Hosted games">
+        <div class="sidebar-label">Hosted games</div>
+        <nav id="game-list" class="game-list"></nav>
+        <div class="safety-card">
+          <span class="safety-icon" aria-hidden="true">✓</span>
+          <div>
+            <strong>Guarded control mode</strong>
+            <p>Preview first. Confirm once. Every applied change is audited.</p>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <section class="hero-panel" aria-labelledby="game-name">
+          <div class="hero-copy">
+            <div class="eyebrow">Selected server</div>
+            <div class="title-row">
+              <h1 id="game-name">Loading…</h1>
+              <span id="server-state" class="state-badge offline">UNKNOWN</span>
+            </div>
+            <p id="game-description">Loading game profile and live status.</p>
+          </div>
+          <div class="hero-meta">
+            <span>Last refresh</span>
+            <strong id="last-refresh">—</strong>
+          </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Live server summary">
+          <article class="metric-card">
+            <span>Connect</span>
+            <strong id="connect-value">—</strong>
+          </article>
+          <article class="metric-card">
+            <span>Uptime</span>
+            <strong id="uptime-value">—</strong>
+          </article>
+          <article class="metric-card">
+            <span>Players</span>
+            <strong id="players-value">—</strong>
+          </article>
+          <article class="metric-card">
+            <span>Memory</span>
+            <strong id="memory-value">—</strong>
+          </article>
+        </section>
+
+        <div class="content-grid">
+          <section class="controls-panel" aria-labelledby="controls-heading">
+            <div class="section-heading">
+              <div>
+                <div class="eyebrow">Game profile</div>
+                <h2 id="controls-heading">Controls</h2>
+              </div>
+              <span class="schema-pill">Declarative schema v1</span>
+            </div>
+            <div id="controls-root"></div>
+          </section>
+
+          <aside class="activity-panel" aria-labelledby="activity-heading">
+            <div class="section-heading compact-heading">
+              <div>
+                <div class="eyebrow">This session</div>
+                <h2 id="activity-heading">Activity</h2>
+              </div>
+            </div>
+            <div id="activity-root"></div>
+            <div class="policy-note">
+              <strong>No arbitrary commands</strong>
+              <p>Profiles can request only approved actions. Shell text in a profile is rejected.</p>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="confirm-dialog" class="confirm-dialog">
+    <form method="dialog" class="dialog-card" onsubmit="return false">
+      <div class="dialog-accent" aria-hidden="true"></div>
+      <div class="eyebrow">Human approval checkpoint</div>
+      <h2 id="confirm-title">Review proposed action</h2>
+      <p id="confirm-copy"></p>
+      <div class="dialog-warning">
+        The preview token expires in five minutes and can be used only once.
       </div>
-      <div class="connect-list"><code id="palPublic">—</code><code id="palLan">—</code></div>
-    </div>
-  </section>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="button outline" type="button">Cancel</button>
+        <button id="confirm-apply" class="button default" type="button">Apply change</button>
+      </div>
+    </form>
+  </dialog>
 
-  <section class="row">
-    <div class="card">
-      <div class="card-head"><div><div class="label">Host</div><h2>Box health</h2></div><span class="badge ok">live</span></div>
-      <div class="details-grid two"><div><div class="label">WSL RAM</div><strong id="wslMem">—</strong></div><div><div class="label">Dashboard</div><strong>local add-on</strong></div></div>
-      <div class="bar-list" id="diskBars"></div>
-    </div>
-    <div class="card">
-      <div class="card-head"><div><div class="label">Backups</div><h2>Freshness</h2></div></div>
-      <div class="backup-list" id="backups"></div>
-    </div>
-  </section>
-
-  <section class="card" style="margin-top:16px">
-    <div class="card-head"><div><div class="label">Events</div><h2>Minecraft log pulse</h2></div><span class="pill" id="updatedAt">—</span></div>
-    <div class="logs" id="mcLog"></div>
-  </section>
-</main>
-<script src="/static/app.js"></script>
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
 </body>
 </html>

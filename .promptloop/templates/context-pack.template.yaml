@@ -1,0 +1,18 @@
+objective: ""
+source_plan: docs/plans/2026-07-29-v1-release-plan.md
+repo_root: ""
+worktree: ""
+branch: ""
+baseline_commit: ""
+git_status: ""
+owned_files: []
+relevant_files: []
+excluded_context: []
+required_verification: []
+risk_class: ""
+forbidden_actions:
+  - real game-server lifecycle or restore
+  - live deployment
+  - dependency installation without approval
+  - push or force-push
+  - unrelated file edits

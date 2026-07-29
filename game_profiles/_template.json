@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "1.0",
+  "id": "my-game-id",
+  "name": "My Game Display Name",
+  "description": "Brief description shown in the console header. Mention game type, version requirements, or special notes.",
+  "icon": "Gamepad2",
+  "controls": [
+    {
+      "id": "refresh",
+      "kind": "button",
+      "label": "Refresh status",
+      "group": "Operations",
+      "risk": "read-only",
+      "variant": "outline",
+      "binding": { "action": "ui.refresh" }
+    },
+    {
+      "id": "start",
+      "kind": "button",
+      "label": "Start server",
+      "group": "Operations",
+      "risk": "service",
+      "enabledWhen": "offline",
+      "binding": { "action": "service.start" }
+    },
+    {
+      "id": "stop",
+      "kind": "button",
+      "label": "Stop server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "help": "Gracefully stops the server and saves before exiting.",
+      "binding": { "action": "service.stop" }
+    },
+    {
+      "id": "restart",
+      "kind": "button",
+      "label": "Restart server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "binding": { "action": "service.restart" }
+    }
+  ]
+}

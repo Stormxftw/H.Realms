@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "1.0",
+  "id": "valheim",
+  "name": "Valheim",
+  "description": "Viking survival dedicated server. SteamCMD AppID 896660 — anonymous login supported. World name, seed, and password set in start.sh.",
+  "icon": "Shield",
+  "controls": [
+    {
+      "id": "refresh",
+      "kind": "button",
+      "label": "Refresh status",
+      "group": "Operations",
+      "risk": "read-only",
+      "variant": "outline",
+      "binding": { "action": "ui.refresh" }
+    },
+    {
+      "id": "start",
+      "kind": "button",
+      "label": "Start server",
+      "group": "Operations",
+      "risk": "service",
+      "enabledWhen": "offline",
+      "binding": { "action": "service.start" }
+    },
+    {
+      "id": "stop",
+      "kind": "button",
+      "label": "Stop server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "help": "Sends SIGTERM to valheim_server. Players will be disconnected.",
+      "binding": { "action": "service.stop" }
+    },
+    {
+      "id": "restart",
+      "kind": "button",
+      "label": "Restart server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "binding": { "action": "service.restart" }
+    }
+  ]
+}

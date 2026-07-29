@@ -1,0 +1,14 @@
+{
+  "extends": "/path/to/hermes-agent/apps/desktop/tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "typeRoots": ["/path/to/hermes-agent/node_modules/@types"]
+  },
+  "include": [
+    "/path/to/hermes-agent/apps/desktop/src/vite-env.d.ts",
+    "../desktop-plugin/plugin.js"
+  ]
+}

@@ -1,0 +1,65 @@
+version: 1
+name: game-host-console-v1-swarm
+source_plan: docs/plans/2026-07-29-v1-release-plan.md
+max_revision_attempts: 3
+real_server_mutation: forbidden
+live_deployment: approval_required
+
+waves:
+  - id: preflight
+    mode: orchestrator
+    tasks:
+      - snapshot dirty tree outside repository
+      - verify complete baseline test path
+      - create checkpoint branch and baseline commit
+      - smoke-test evidence loop
+
+  - id: wave-1-foundations
+    mode: parallel_isolated_worktrees
+    tasks:
+      - story: GHC-001
+        lane: registry
+        merge_order: 1
+      - story: GHC-008
+        lane: security
+        merge_order: 2
+      - story: GHC-010-foundation
+        lane: release-scaffold
+        scope: release-check command, dependency manifest, clean tracked artifact rules
+        merge_order: 3
+    gate: targeted tests, full baseline, spec review, quality/safety review
+
+  - id: wave-2-truth
+    mode: sequential_vertical_slices
+    tasks:
+      - story: GHC-002
+      - story: GHC-003
+    gate: disposable-fixture readiness and protocol tests plus UI contract tests
+
+  - id: wave-3-operations
+    mode: sequential_vertical_slices
+    tasks:
+      - story: GHC-005
+        scope: durable operation substrate first
+      - story: GHC-004
+        scope: verified lifecycle integration
+      - story: GHC-011
+    gate: interrupted-operation recovery, stale/digest/concurrency rejects, fake-process postconditions
+
+  - id: wave-4-recovery-and-ops
+    mode: mixed
+    tasks:
+      - story: GHC-006
+      - story: GHC-007
+      - story: GHC-009
+    gate: outside-sentinel restore tests, redaction tests, disposable Hermes-home lifecycle tests
+
+  - id: wave-5-release
+    mode: sequential_review
+    tasks:
+      - story: GHC-010-completion
+      - independent_spec_review
+      - independent_quality_and_safety_review
+      - full_release_check
+      - non_destructive_live_smoke
+    gate: joe_deployment_approval

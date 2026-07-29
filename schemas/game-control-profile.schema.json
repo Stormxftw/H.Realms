@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.hermes/game-host-control-profile.schema.json",
+  "title": "Hermes Game Host Control Profile",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "controls"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "description": { "type": "string", "maxLength": 400 },
+    "icon": { "type": "string", "maxLength": 40 },
+    "controls": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/control" }
+    }
+  },
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "enum": [
+            "ui.refresh",
+            "property.set",
+            "service.start",
+            "service.stop",
+            "service.restart",
+            "backup.create"
+          ]
+        },
+        "key": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+      },
+      "additionalProperties": false
+    },
+    "control": {
+      "type": "object",
+      "required": ["id", "kind", "label", "risk", "binding"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "kind": {
+          "enum": ["button", "switch", "slider", "select", "text", "number", "readonly"]
+        },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "group": { "type": "string", "maxLength": 60 },
+        "help": { "type": "string", "maxLength": 300 },
+        "risk": {
+          "enum": ["read-only", "safe", "safe-mutation", "configuration", "service", "disruptive"]
+        },
+        "restartRequired": { "type": "boolean" },
+        "enabledWhen": { "enum": ["online", "offline"] },
+        "variant": { "enum": ["default", "secondary", "outline", "destructive"] },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number", "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "maxLength": 30 },
+        "maxLength": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "value": {},
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": {
+              "value": {},
+              "label": { "type": "string", "maxLength": 80 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "binding": { "$ref": "#/$defs/binding" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
