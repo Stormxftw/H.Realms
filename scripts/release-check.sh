@@ -24,6 +24,7 @@ REQUIRED_RELEASE_ARTIFACTS=(
   pyproject.toml
   app.py
   control_engine.py
+  registry.py
   game_adapters.json
   static/index.html
   static/app.css
@@ -47,6 +48,7 @@ REQUIRED_RELEASE_ARTIFACTS=(
   game_profiles/valheim.json
   tests/test_app_api.py
   tests/test_control_engine.py
+  tests/test_registry.py
   tests/test_plugin_api.py
   tests/test_telemetry.py
   tests/ui.test.js
