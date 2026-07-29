@@ -13,6 +13,10 @@ assert.match(source, /ConfirmDialog/);
 assert.match(source, /ctx\.rest\(['"]\/proxy\/api\/status['"]/);
 assert.match(source, /defaultEnabled:\s*false/);
 assert.match(source, /const ROUTE = ['"]\/game-host['"]/);
+assert.match(source, /disabledReason/);
+assert.match(source, /blockers/);
+assert.match(source, /running_degraded/);
+assert.match(source, /unknown/);
 assert.doesNotMatch(source, /<iframe|jsx\(['"]iframe['"]/);
 assert.doesNotMatch(source, /https?:\/\//);
 

@@ -38,6 +38,7 @@ import { jsx } from 'react/jsx-runtime'
  * @property {string} [help]
  * @property {string} [risk]
  * @property {boolean} [disabled]
+ * @property {string} [disabledReason]
  * @property {string} [enabledWhen]
  * @property {ControlBinding} [binding]
  * @property {*} [variant]
@@ -56,15 +57,21 @@ import { jsx } from 'react/jsx-runtime'
  * @property {string} id
  * @property {string} name
  * @property {string} [description]
+ * @property {string} [readiness]
+ * @property {boolean} [projectPresent]
+ * @property {{ message?: string }[]} [blockers]
  * @property {Control[]} [controls]
  */
 /** @typedef {{ games?: Game[] }} Catalog */
 /**
  * @typedef {object} ServiceStatus
  * @property {boolean} [online]
- * @property {{ uptimeHuman?: string, rssMB?: number }} [process]
+ * @property {string} [state]
+ * @property {{ ok?: boolean, running?: boolean, error?: string, uptimeHuman?: string, rssMB?: number }} [process]
  * @property {{ lan?: string, local?: string, public?: string }} [connect]
  * @property {{ online?: number, max?: number }} [players]
+ * @property {{ ok?: boolean, listening?: boolean, error?: string, protocol?: string, port?: number }[]} [listeners]
+ * @property {{ attempted?: boolean, ok?: boolean, error?: string }} [query]
  */
 /** @typedef {{ services?: Record<string, ServiceStatus> }} HostStatus */
 /**
@@ -120,6 +127,36 @@ function isControlEnabled(control, online) {
   if (control.enabledWhen === 'online') return online === true
   if (control.enabledWhen === 'offline') return online === false
   return true
+}
+
+/** @param {Game} game @param {ServiceStatus | null | undefined} service */
+function statusPresentation(game, service) {
+  const states = /** @type {Record<string, { label: string, tone: string, variant: string }>} */ ({
+    running_ready: { label: 'RUNNING', tone: 'good', variant: 'default' },
+    running_degraded: { label: 'DEGRADED', tone: 'warn', variant: 'warn' },
+    stopped: { label: 'STOPPED', tone: 'muted', variant: 'muted' },
+    not_installed: { label: 'SETUP NEEDED', tone: 'warn', variant: 'warn' },
+    unknown: { label: 'UNKNOWN', tone: 'muted', variant: 'muted' },
+  })
+  const state = service?.state && states[service.state]
+    ? service.state
+    : game.projectPresent === false || game.readiness === 'needs_setup'
+      ? 'not_installed'
+      : 'unknown'
+  const reasons = []
+  for (const blocker of game.blockers || []) {
+    if (blocker.message) reasons.push(blocker.message)
+  }
+  if (service?.process?.error) reasons.push(service.process.error)
+  for (const listener of service?.listeners || []) {
+    if (listener.error) reasons.push(listener.error)
+    else if (listener.ok === true && listener.listening === false && service?.process?.running === true) {
+      reasons.push(`No ${String(listener.protocol || '').toUpperCase()} listener detected on port ${listener.port}.`)
+    }
+  }
+  if (service?.query?.error) reasons.push(service.query.error)
+  if (state === 'unknown' && reasons.length === 0) reasons.push('Status probes did not return a result.')
+  return { state, ...states[state], reasons: [...new Set(reasons)] }
 }
 
 /** @param {ActionPlan} plan */
@@ -277,6 +314,12 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
       className: 'text-xs text-muted-foreground',
       children: 'Takes effect after a server restart.',
     }, 'restart'))
+  }
+  if (control.disabled && control.disabledReason) {
+    body.push(jsx('p', {
+      className: 'text-xs leading-5 text-amber-500',
+      children: control.disabledReason,
+    }, 'disabled-reason'))
   }
 
   return jsx('article', {
@@ -444,6 +487,7 @@ function createGameHostPage(ctx) {
       })
     }
 
+    const presentation = statusPresentation(game, service)
     const process = service?.process || {}
     const connect = service?.connect || {}
     const groups = /** @type {Map<string, Control[]>} */ (new Map())
@@ -473,13 +517,13 @@ function createGameHostPage(ctx) {
         jsx('div', {
           className: narrow ? 'flex gap-2 overflow-x-auto' : 'grid gap-2',
           children: games.map(item => {
-            const itemOnline = status?.services?.[item.id]?.online === true
+            const itemStatus = statusPresentation(item, status?.services?.[item.id])
             return jsx(Button, {
               className: narrow ? 'shrink-0 justify-start' : 'w-full justify-start',
               onClick: () => selectGame(item.id),
               variant: item.id === game.id ? 'secondary' : 'ghost',
               children: [
-                jsx(StatusDot, { tone: itemOnline ? 'good' : 'muted' }, 'dot'),
+                jsx(StatusDot, { tone: itemStatus.tone }, 'dot'),
                 jsx('span', { children: item.name }, 'name'),
               ],
             }, item.id)
@@ -511,12 +555,16 @@ function createGameHostPage(ctx) {
                       jsx('div', {
                         className: 'flex items-center gap-2',
                         children: [
-                          jsx(StatusDot, { tone: online ? 'good' : 'muted' }, 'dot'),
-                          jsx(Badge, { variant: online ? 'default' : 'muted', children: online ? 'ONLINE' : 'OFFLINE' }, 'badge'),
+                          jsx(StatusDot, { tone: presentation.tone }, 'dot'),
+                          jsx(Badge, { variant: presentation.variant, children: presentation.label }, 'badge'),
                         ],
                       }, 'status'),
                       jsx('h1', { className: 'mt-3 text-2xl font-semibold tracking-tight', children: game.name }, 'name'),
                       jsx('p', { className: 'mt-2 max-w-2xl text-sm leading-6 text-muted-foreground', children: game.description || 'Game-specific controls managed by Hermes.' }, 'description'),
+                      presentation.reasons.length ? jsx('div', {
+                        className: 'mt-3 grid gap-1 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-5 text-amber-500',
+                        children: presentation.reasons.map((reason, index) => jsx('p', { children: reason }, `${index}-${reason}`)),
+                      }, 'status-reasons') : null,
                     ],
                   }, 'copy'),
                   jsx(Button, {

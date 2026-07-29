@@ -22,6 +22,34 @@
     return true;
   }
 
+  function statusPresentation(game = {}, service = {}) {
+    const presentations = {
+      running_ready: { label: 'RUNNING', tone: 'online' },
+      running_degraded: { label: 'DEGRADED', tone: 'degraded' },
+      stopped: { label: 'STOPPED', tone: 'offline' },
+      not_installed: { label: 'SETUP NEEDED', tone: 'setup' },
+      unknown: { label: 'UNKNOWN', tone: 'unknown' },
+    };
+    const inferred = game.projectPresent === false || game.readiness === 'needs_setup'
+      ? 'not_installed'
+      : 'unknown';
+    const state = presentations[service.state] ? service.state : inferred;
+    const reasons = [];
+    for (const blocker of game.blockers || service.blockers || []) {
+      if (blocker?.message) reasons.push(blocker.message);
+    }
+    if (service.process?.error) reasons.push(service.process.error);
+    for (const listener of service.listeners || []) {
+      if (listener.error) reasons.push(listener.error);
+      else if (listener.ok === true && listener.listening === false && service.process?.running === true) {
+        reasons.push(`No ${String(listener.protocol || '').toUpperCase()} listener detected on port ${listener.port}.`);
+      }
+    }
+    if (service.query?.error) reasons.push(service.query.error);
+    if (state === 'unknown' && reasons.length === 0) reasons.push('Status probes did not return a result.');
+    return { state, ...presentations[state], reasons: [...new Set(reasons)] };
+  }
+
   function confirmationCopy(plan) {
     const before = plan.currentValue === null || plan.currentValue === undefined
       ? 'current state'
@@ -35,7 +63,7 @@
     return `${plan.gameName}: ${plan.controlLabel}. Change ${before} to ${after}. Risk: ${plan.risk}.${restart}`;
   }
 
-  const exported = { apiPath, controlState, isControlEnabled, confirmationCopy };
+  const exported = { apiPath, controlState, isControlEnabled, statusPresentation, confirmationCopy };
   if (typeof module !== 'undefined' && module.exports) module.exports = exported;
   if (typeof document === 'undefined') return;
 
@@ -124,7 +152,7 @@
     gameList.replaceChildren();
     for (const game of state.catalog?.games || []) {
       const service = serviceFor(game.id);
-      const online = service?.online === true;
+      const presentation = statusPresentation(game, service || {});
       const button = element('button', `game-row${game.id === state.selectedGameId ? ' active' : ''}`);
       button.type = 'button';
       button.addEventListener('click', () => {
@@ -133,9 +161,9 @@
         render();
       });
       const identity = element('span', 'game-identity');
-      identity.append(element('span', `status-dot ${online ? 'online' : 'offline'}`));
+      identity.append(element('span', `status-dot ${presentation.tone}`));
       const labels = element('span', 'game-labels');
-      labels.append(element('strong', '', game.name), element('small', '', online ? 'Online' : 'Offline'));
+      labels.append(element('strong', '', game.name), element('small', '', presentation.label));
       identity.appendChild(labels);
       button.append(identity, element('span', 'chevron', '›'));
       gameList.appendChild(button);
@@ -143,12 +171,15 @@
   }
 
   function renderHero(game, service) {
-    const online = service?.online === true;
+    const presentation = statusPresentation(game, service || {});
     $('#game-name').textContent = game.name;
     $('#game-description').textContent = game.description || 'Typed controls managed by Hermes.';
     const stateBadge = $('#server-state');
-    stateBadge.textContent = online ? 'ONLINE' : 'OFFLINE';
-    stateBadge.className = `state-badge ${online ? 'online' : 'offline'}`;
+    stateBadge.textContent = presentation.label;
+    stateBadge.className = `state-badge ${presentation.tone}`;
+    const reasons = $('#status-reasons');
+    reasons.replaceChildren(...presentation.reasons.map(reason => element('p', '', reason)));
+    reasons.hidden = presentation.reasons.length === 0;
     $('#last-refresh').textContent = state.status?.generatedAt
       ? new Date(state.status.generatedAt).toLocaleTimeString()
       : '—';
@@ -257,6 +288,7 @@
     }
 
     if (control.restartRequired) body.appendChild(element('p', 'restart-note', 'Takes effect after a server restart.'));
+    if (!enabled && control.disabledReason) body.appendChild(element('p', 'disabled-reason', control.disabledReason));
     card.appendChild(body);
     return card;
   }

@@ -24,6 +24,7 @@ REQUIRED_RELEASE_ARTIFACTS=(
   pyproject.toml
   app.py
   control_engine.py
+  telemetry.py
   registry.py
   game_adapters.json
   static/index.html
@@ -50,6 +51,7 @@ REQUIRED_RELEASE_ARTIFACTS=(
   tests/test_control_engine.py
   tests/test_registry.py
   tests/test_plugin_api.py
+  tests/test_readiness.py
   tests/test_telemetry.py
   tests/ui.test.js
   tests/desktop_plugin.test.js

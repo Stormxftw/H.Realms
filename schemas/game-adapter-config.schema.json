@@ -13,7 +13,7 @@
       "patternProperties": {
         "^[a-z0-9-]+$": {
           "type": "object",
-          "required": ["projectDir", "commands", "processSearch", "defaultPort"],
+          "required": ["projectDir", "commands", "processSearch", "defaultPort", "portProtocol"],
           "properties": {
             "projectDir": {
               "type": "string",
@@ -67,6 +67,46 @@
             "portProtocol": {
               "enum": ["tcp", "udp"],
               "description": "Transport protocol for the game port"
+            },
+            "queryPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Optional protocol-query port when it differs from the game port"
+            },
+            "additionalPorts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["port", "protocol"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+                  "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                  "protocol": { "enum": ["tcp", "udp"] }
+                },
+                "additionalProperties": false
+              }
+            },
+            "requiredPaths": {
+              "type": "array",
+              "description": "Filesystem evidence required beneath projectDir before mutations are available",
+              "items": {
+                "type": "object",
+                "required": ["path", "kind", "type"],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+                  },
+                  "kind": {
+                    "enum": ["binary", "config", "token", "world", "save", "backup", "log"]
+                  },
+                  "type": { "enum": ["file", "directory"] },
+                  "description": { "type": "string", "minLength": 1, "maxLength": 120 }
+                },
+                "additionalProperties": false
+              }
             },
             "steamAppId": {
               "type": "integer",
