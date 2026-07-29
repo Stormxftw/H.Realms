@@ -1,9 +1,35 @@
+# Python and test caches
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Generated logs and process state
 logs/*.log
+logs/*.log.*
 *.pid
-*.in
-downloads/*.zip
+
+# Deployment backups
 .install-backups/
+
+# Durable operation database and generated operation state
+data/operations.sqlite3
+data/operations.sqlite3-wal
+data/operations.sqlite3-shm
+data/operations.sqlite3-journal
+data/operation-state.json
+
+# Browser-test output
+/tests/browser/output/
+/playwright-report/
+/test-results/
+
+# Downloaded archives
+/downloads/*.zip
+/downloads/*.tar
+/downloads/*.tar.gz
+/downloads/*.tgz
+/downloads/*.tar.xz
+/downloads/*.7z
+
+# Generated prompt-loop run logs
 .promptloop/runs/

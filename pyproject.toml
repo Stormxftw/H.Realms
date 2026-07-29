@@ -1,0 +1,13 @@
+[project]
+name = "hermes-game-host-console"
+version = "0.2.0"
+description = "Typed, guarded controls for local dedicated game servers"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.100,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "jsonschema>=4.18,<5",
+]
