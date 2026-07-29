@@ -2,6 +2,12 @@ import asyncio
 import importlib.util
 import io
 import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 import unittest
 import urllib.error
 from email.message import Message
@@ -10,9 +16,9 @@ from unittest import mock
 
 
 PLUGIN_DIR = Path(__file__).parents[1] / "hermes-plugin" / "dashboard"
-MANIFEST_PATH = PLUGIN_DIR / "manifest.json"
 MODULE_PATH = PLUGIN_DIR / "plugin_api.py"
 PLUGIN_PREFIX = "/api/plugins/game-host-console"
+HERMES_AGENT_ROOT = Path("/home/zim/.hermes/hermes-agent")
 
 
 def load_plugin_api(module_path=MODULE_PATH):
@@ -114,66 +120,231 @@ class PluginApiTests(unittest.TestCase):
                 else:
                     self.assertEqual(0, rule.max_body)
 
-    def test_manifest_plugin_api_mounts_authenticated_get_and_post_proxy_routes(self):
-        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("plugin_api.py", manifest["api"])
-        module_path = (MANIFEST_PATH.parent / manifest["api"]).resolve()
-        self.assertEqual(MODULE_PATH.resolve(), module_path)
+    def test_service_origin_rejects_nonlocal_or_ambiguous_overrides_before_upstream(self):
+        invalid_origins = (
+            "not a url",
+            "http://localhost:5057",
+            "http://192.168.1.25:5057",
+            "http://8.8.8.8:5057",
+            "https://127.0.0.1:5057",
+            "http://[::1]:5057",
+            "http://user:pass@127.0.0.1:5057",
+            "http://127.0.0.1:5057/path",
+            "http://127.0.0.1:5057?query=yes",
+            "http://127.0.0.1:5057#fragment",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:not-a-port",
+        )
+        for origin in invalid_origins:
+            with self.subTest(origin=origin):
+                with mock.patch.dict(os.environ, {"GAME_HOST_SERVICE_URL": origin}):
+                    with mock.patch("urllib.request.urlopen") as urlopen:
+                        with self.assertRaisesRegex(ValueError, "GAME_HOST_SERVICE_URL"):
+                            load_plugin_api()
+                urlopen.assert_not_called()
 
-        module = load_plugin_api(module_path)
+    def test_service_origin_accepts_only_plain_loopback_ipv4_origin(self):
+        with mock.patch.dict(
+            os.environ, {"GAME_HOST_SERVICE_URL": "http://127.0.0.2:5058"}
+        ):
+            module = load_plugin_api()
         if module is None:
             self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
-        if module.__file__ is None:
-            self.fail("manifest API module did not load from a file")
-        self.assertEqual(module_path, Path(module.__file__).resolve())
 
-        from fastapi import Depends, FastAPI, HTTPException, Request
-        from fastapi.routing import APIRoute
+        self.assertEqual("http://127.0.0.2:5058", module.SERVICE_BASE)
+
+    def test_proxy_coroutines_offload_blocking_upstream_work(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+
+        class EmptyRequest:
+            headers = {}
+
+            async def stream(self):
+                yield b""
+
+        sentinel = object()
+
+        def slow_proxy(*_args):
+            time.sleep(0.2)
+            return sentinel
+
+        async def exercise(proxy_call):
+            started = time.monotonic()
+            task = asyncio.create_task(proxy_call())
+            await asyncio.sleep(0.02)
+            unrelated_resumed_after = time.monotonic() - started
+            result = await task
+            return unrelated_resumed_after, result
+
+        calls = (
+            lambda: module.proxy_get("health", EmptyRequest()),
+            lambda: module.proxy_post("api/control/plan", EmptyRequest()),
+        )
+        with mock.patch.object(module, "_proxy", side_effect=slow_proxy):
+            for proxy_call in calls:
+                with self.subTest(proxy_call=proxy_call):
+                    resumed_after, result = asyncio.run(exercise(proxy_call))
+                    self.assertLess(resumed_after, 0.1)
+                    self.assertIs(sentinel, result)
+
+    def test_get_proxy_rejects_declared_or_streamed_body_before_upstream(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+
+        from fastapi import FastAPI
         from httpx import ASGITransport, AsyncClient
 
-        def require_authentication(request: Request):
-            if request.headers.get("authorization") != "Bearer review-session":
-                raise HTTPException(status_code=401, detail="Authentication required")
-
         host = FastAPI()
-        host.include_router(
-            module.router,
-            prefix=PLUGIN_PREFIX,
-            dependencies=[Depends(require_authentication)],
-        )
+        host.include_router(module.router, prefix=PLUGIN_PREFIX)
 
-        proxy_methods = {
-            method
-            for route in host.routes
-            if isinstance(route, APIRoute)
-            if route.path == f"{PLUGIN_PREFIX}/proxy/{{path:path}}"
-            for method in route.methods
-        }
-        self.assertEqual({"GET", "POST"}, proxy_methods)
+        async def streamed_body():
+            yield b"x"
 
-        async def request_proxy():
+        async def request_bodies():
             transport = ASGITransport(app=host)
             async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-                unauthenticated = await client.get(f"{PLUGIN_PREFIX}/proxy/health")
-                authenticated = await client.get(
+                declared = await client.request(
+                    "GET",
                     f"{PLUGIN_PREFIX}/proxy/health",
-                    headers={"Authorization": "Bearer review-session"},
+                    content=b"x",
                 )
-            return unauthenticated, authenticated
+                streamed = await client.request(
+                    "GET",
+                    f"{PLUGIN_PREFIX}/proxy/health",
+                    content=streamed_body(),
+                )
+            return declared, streamed
 
-        upstream = UpstreamResponse(b'{"status":"ok"}')
-        with mock.patch.object(module.urllib.request, "urlopen", return_value=upstream) as urlopen:
-            unauthenticated, authenticated = asyncio.run(request_proxy())
+        with mock.patch.object(module.urllib.request, "urlopen") as urlopen:
+            declared, streamed = asyncio.run(request_bodies())
 
-        self.assertEqual(401, unauthenticated.status_code)
-        self.assertEqual(200, authenticated.status_code)
-        self.assertEqual({"status": "ok"}, authenticated.json())
-        urlopen.assert_called_once()
-        request = urlopen.call_args.args[0]
-        self.assertEqual("GET", request.get_method())
-        self.assertEqual(f"{module.SERVICE_BASE}/health", request.full_url)
-        rule = module._proxy_rule("GET", "health")
-        self.assertEqual([rule.max_response + 1], upstream.stream.read_sizes)
+        self.assertEqual(413, declared.status_code)
+        self.assertEqual(413, streamed.status_code)
+        urlopen.assert_not_called()
+
+    def test_real_hermes_loader_mounts_enabled_plugin_behind_session_auth(self):
+        self.assertTrue(
+            (HERMES_AGENT_ROOT / "hermes_cli" / "web_server.py").is_file(),
+            "real local Hermes loader is required for this integration test",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            hermes_home = Path(tmp) / "hermes-home"
+            plugin_target = hermes_home / "plugins" / "game-host-console"
+            shutil.copytree(Path(__file__).parents[1] / "hermes-plugin", plugin_target)
+            (hermes_home / "config.yaml").write_text(
+                "plugins:\n  enabled:\n    - game-host-console\n",
+                encoding="utf-8",
+            )
+            harness = r'''
+import asyncio
+import json
+import urllib.request
+from unittest import mock
+
+from httpx import ASGITransport, AsyncClient
+from hermes_cli import web_server
+
+prefix = "/api/plugins/game-host-console"
+plugins = web_server._get_dashboard_plugins()
+entry = next(plugin for plugin in plugins if plugin["name"] == "game-host-console")
+assert entry["source"] == "user"
+assert entry["has_api"] is True
+assert entry["_api_file"] == "plugin_api.py"
+
+route_methods = {
+    method
+    for route in web_server.app.routes
+    if getattr(route, "path", None) == f"{prefix}/proxy/{{path:path}}"
+    for method in getattr(route, "methods", set())
+}
+assert route_methods == {"GET", "POST"}
+
+class Upstream:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, size=-1):
+        assert 0 < size <= 16_385
+        return b'{"status":"ok"}'
+
+async def exercise():
+    web_server.app.state.auth_required = False
+    web_server.app.state.bound_host = "127.0.0.1"
+    transport = ASGITransport(app=web_server.app)
+    async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        unauthenticated = await client.get(f"{prefix}/proxy/health")
+        plugin_list = await client.get(
+            "/api/dashboard/plugins",
+            headers={"X-Hermes-Session-Token": "real-loader-session"},
+        )
+        authenticated = await client.get(
+            f"{prefix}/proxy/health",
+            headers={"X-Hermes-Session-Token": "real-loader-session"},
+        )
+    return unauthenticated, plugin_list, authenticated
+
+with mock.patch.object(urllib.request, "urlopen", return_value=Upstream()) as urlopen:
+    unauthenticated, plugin_list, authenticated = asyncio.run(exercise())
+
+assert unauthenticated.status_code == 401
+assert plugin_list.status_code == 200
+visible = next(plugin for plugin in plugin_list.json() if plugin["name"] == "game-host-console")
+assert visible["has_api"] is True
+assert authenticated.status_code == 200
+assert authenticated.json() == {"status": "ok"}
+urlopen.assert_called_once()
+request = urlopen.call_args.args[0]
+assert request.full_url == "http://127.0.0.1:5057/health"
+print("REAL_LOADER_RESULT=" + json.dumps({
+    "has_api": visible["has_api"],
+    "route_methods": sorted(route_methods),
+    "unauthenticated": unauthenticated.status_code,
+    "authenticated": authenticated.status_code,
+}))
+'''
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PYTHONPATH": str(HERMES_AGENT_ROOT),
+                    "HERMES_HOME": str(hermes_home),
+                    "HERMES_DASHBOARD_SESSION_TOKEN": "real-loader-session",
+                    "GAME_HOST_SERVICE_URL": "http://127.0.0.1:5057",
+                }
+            )
+            for name in ("HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV"):
+                env.pop(name, None)
+            result = subprocess.run(
+                [sys.executable, "-c", harness],
+                cwd=Path(__file__).parents[1],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        evidence = next(
+            line.removeprefix("REAL_LOADER_RESULT=")
+            for line in result.stdout.splitlines()
+            if line.startswith("REAL_LOADER_RESULT=")
+        )
+        self.assertEqual(
+            {
+                "has_api": True,
+                "route_methods": ["GET", "POST"],
+                "unauthenticated": 401,
+                "authenticated": 200,
+            },
+            json.loads(evidence),
+        )
 
     def test_success_response_limit_uses_a_bounded_upstream_read(self):
         module = load_plugin_api()

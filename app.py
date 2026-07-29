@@ -455,7 +455,26 @@ class Handler(BaseHTTPRequestHandler):
             raise ControlEngineError("request body must be a JSON object")
         return value
 
+    def reject_untrusted_host(self) -> bool:
+        host_headers = self.headers.get_all("Host", [])
+        server_address = self.server.server_address
+        valid = False
+        if (
+            isinstance(server_address, tuple)
+            and len(server_address) >= 2
+            and len(host_headers) == 1
+        ):
+            valid = accepted_request_host(
+                host_headers[0], str(server_address[0]), int(server_address[1])
+            )
+        if not valid:
+            self.send_json(400, {"error": "invalid Host header"})
+            return True
+        return False
+
     def do_GET(self) -> None:
+        if self.reject_untrusted_host():
+            return
         try:
             if self.path in ("/", "/index.html"):
                 self.send_file(STATIC / "index.html", "text/html; charset=utf-8")
@@ -485,6 +504,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": str(exc), "generatedAt": iso()})
 
     def do_POST(self) -> None:
+        if self.reject_untrusted_host():
+            return
         try:
             body = self.read_json()
             plan_actors = {
@@ -522,13 +543,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": str(exc), "generatedAt": iso()})
 
 
+def accepted_request_host(host_header: str, bound_host: str, bound_port: int) -> bool:
+    allowed_hosts = {bound_host.lower()}
+    if bound_host == "127.0.0.1":
+        allowed_hosts.add("localhost")
+    allowed_pattern = "|".join(re.escape(value) for value in sorted(allowed_hosts))
+    match = re.fullmatch(
+        rf"({allowed_pattern})(?::([0-9]{{1,5}}))?",
+        host_header,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return False
+    declared_port = match.group(2)
+    return declared_port is None or declared_port == str(bound_port)
+
+
 def require_loopback_host(host: str) -> str:
     try:
         address = ipaddress.ip_address(host)
     except ValueError as exc:
-        raise ValueError("host must be a loopback IP address") from exc
-    if not address.is_loopback:
-        raise ValueError("host must be a loopback IP address")
+        raise ValueError("host must be an IPv4 loopback address") from exc
+    if address.version != 4 or not address.is_loopback:
+        raise ValueError("host must be an IPv4 loopback address")
     return host
 
 
