@@ -6,21 +6,23 @@ inside Hermes Desktop and proxies only an explicit set of typed local endpoints.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter()
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
-SERVICE_BASE = os.environ.get("GAME_HOST_SERVICE_URL", "http://127.0.0.1:5057").rstrip("/")
 PLUGIN_BASE = "/api/plugins/game-host-console"
 MAX_BODY = 65_536
 MAX_RESPONSE = 1_048_576
@@ -44,6 +46,44 @@ PROXY_RULES = {
 DYNAMIC_PROXY_RULES = (
     ("GET", re.compile(r"api/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}"), 524_288),
     ("GET", re.compile(r"api/diagnostics/[a-z0-9][a-z0-9-]{0,63}"), MAX_RESPONSE),
+)
+
+
+def _validate_service_base(value: str) -> str:
+    error = (
+        "GAME_HOST_SERVICE_URL must be a plain http origin using a loopback "
+        "IPv4 literal with no credentials, path, query, or fragment"
+    )
+    if not value or value != value.strip():
+        raise ValueError(error)
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+        address = ipaddress.ip_address(parsed.hostname or "")
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    if (
+        parsed.scheme != "http"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or port == 0
+        or address.version != 4
+        or not address.is_loopback
+    ):
+        raise ValueError(error)
+    expected_netloc = address.compressed
+    if port is not None:
+        expected_netloc = f"{expected_netloc}:{port}"
+    if parsed.netloc != expected_netloc:
+        raise ValueError(error)
+    return f"http://{expected_netloc}"
+
+
+SERVICE_BASE = _validate_service_base(
+    os.environ.get("GAME_HOST_SERVICE_URL", "http://127.0.0.1:5057")
 )
 
 
@@ -158,12 +198,14 @@ def app_js() -> Response:
 
 
 @router.get("/proxy/{path:path}")
-def proxy_get(path: str) -> Response:
-    return _proxy("GET", path)
+async def proxy_get(path: str, request: Request) -> Response:
+    rule = _proxy_rule("GET", path)
+    await _read_request_body(request, rule.max_body)
+    return await run_in_threadpool(_proxy, "GET", path)
 
 
 @router.post("/proxy/{path:path}")
 async def proxy_post(path: str, request: Request) -> Response:
     rule = _proxy_rule("POST", path)
     body = await _read_request_body(request, rule.max_body)
-    return _proxy("POST", path, body)
+    return await run_in_threadpool(_proxy, "POST", path, body)
