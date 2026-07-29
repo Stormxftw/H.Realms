@@ -71,7 +71,6 @@ class ControlEngine:
             )
         except RegistryError as exc:
             raise ControlEngineError(str(exc)) from exc
-        self._adapters = self._registry.adapters
         self._plans: dict[str, dict[str, Any]] = {}
         self._plans_lock = threading.Lock()
         self._game_locks: dict[str, threading.Lock] = {}
@@ -79,19 +78,18 @@ class ControlEngine:
 
 
     def _adapter_for(self, game_id: str) -> dict[str, Any]:
-        adapter = self._adapters.get(game_id)
-        if not adapter:
-            raise ControlEngineError(f"no adapter config for game: {game_id}")
-        return adapter
+        try:
+            return self._registry.adapter(game_id)
+        except RegistryError as exc:
+            raise ControlEngineError(str(exc)) from exc
 
     def _property_types_for(self, game_id: str) -> dict[str, str]:
         return self._adapter_for(game_id).get("propertyTypes", {})
 
     def catalog(self) -> dict[str, Any]:
         games = [
-            self.game_view(path.stem)
-            for path in sorted(self.profiles_dir.glob("*.json"))
-            if not path.name.startswith("_")
+            self.game_view(game_id)
+            for game_id in self._registry.game_ids
         ]
         return {
             "schemaVersion": "1.0",
@@ -132,6 +130,7 @@ class ControlEngine:
             raise ControlEngineError(f"unknown control: {game_id}.{control_id}")
         proposed = self._validate_value(control, value)
         action = control["binding"]["action"]
+        self._ensure_action_ready(game_id, action)
         _backend_risk, requires_confirmation = ACTION_POLICIES[action]
         plan_id = secrets.token_urlsafe(24)
         plan = {
@@ -157,6 +156,21 @@ class ControlEngine:
         with self._plans_lock:
             self._plans[plan_id] = plan
         return {key: value for key, value in plan.items() if key != "binding"}
+
+    def _ensure_action_ready(self, game_id: str, action: str) -> None:
+        if action == "ui.refresh":
+            return
+        try:
+            if action == "property.set":
+                self._registry.validated_file_path(
+                    game_id,
+                    Path("server.properties"),
+                    description="property path",
+                )
+            else:
+                self._registry.validated_commands(game_id, action)
+        except RegistryError as exc:
+            raise ControlEngineError(f"action unavailable for {game_id}: {exc}") from exc
 
     def apply(
         self,
@@ -223,10 +237,14 @@ class ControlEngine:
         key = str(binding.get("key", ""))
         if key not in property_types:
             raise ControlEngineError(f"unsupported property binding: {game_id}.{key}")
-        project_dir = self.projects_root / adapter["projectDir"]
-        path = project_dir / "server.properties"
-        if not path.is_file():
-            raise ControlEngineError(f"{game_id} server.properties was not found")
+        try:
+            path = self._registry.validated_file_path(
+                game_id,
+                Path("server.properties"),
+                description="property path",
+            )
+        except RegistryError as exc:
+            raise ControlEngineError(str(exc)) from exc
         current = self._coerce_property(game_id, key, self._read_properties(game_id).get(key))
         if current != plan["currentValue"]:
             raise ControlEngineError("property changed after preview; create a new plan")
@@ -287,14 +305,10 @@ class ControlEngine:
 
     def _commands_for(self, game_id: str, action: str) -> list[tuple[list[str], Path, int]]:
         self._adapter_for(game_id)
-        specs = self._registry.commands[game_id].get(action)
-        if not specs:
-            raise ControlEngineError(f"action is not approved for {game_id}: {action}")
-        project_dir = self._registry.project_dirs[game_id]
-        return [
-            ([str(resolved_script)], project_dir, timeout)
-            for _configured_script, resolved_script, timeout in specs
-        ]
+        try:
+            return self._registry.validated_commands(game_id, action)
+        except RegistryError as exc:
+            raise ControlEngineError(str(exc)) from exc
 
     @staticmethod
     def _default_command_runner(argv: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
@@ -398,30 +412,22 @@ class ControlEngine:
     def _load_profile(self, game_id: str) -> dict[str, Any]:
         if not game_id or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in game_id):
             raise ControlEngineError("invalid game id")
-        path = self.profiles_dir / f"{game_id}.json"
-        if not path.is_file():
-            raise ControlEngineError(f"unknown game profile: {game_id}")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ControlEngineError(f"invalid game profile: {game_id}")
-        unknown = sorted(set(data) - self._PROFILE_FIELDS)
-        if unknown:
-            raise ControlEngineError(f"unknown profile fields: {', '.join(unknown)}")
-        schema = data.get("schemaVersion")
-        if schema != "1.0":
-            raise ControlEngineError(f"unsupported profile schema: {schema}")
-        if data.get("id") != game_id or not data.get("name"):
-            raise ControlEngineError(f"invalid game profile: {game_id}")
-        if not isinstance(data.get("controls"), list):
-            raise ControlEngineError(f"invalid controls list: {game_id}")
-        return data
+        try:
+            return self._registry.profile(game_id)
+        except RegistryError as exc:
+            raise ControlEngineError(str(exc)) from exc
 
     def _read_properties(self, game_id: str) -> dict[str, str]:
-        adapter = self._adapters.get(game_id)
-        if not adapter or not adapter.get("propertyTypes"):
+        adapter = self._adapter_for(game_id)
+        if not adapter.get("propertyTypes"):
             return {}
-        path = self.projects_root / adapter["projectDir"] / "server.properties"
-        if not path.is_file():
+        try:
+            path = self._registry.validated_file_path(
+                game_id,
+                Path("server.properties"),
+                description="property path",
+            )
+        except RegistryError:
             return {}
         values: dict[str, str] = {}
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
