@@ -31,6 +31,50 @@ class GameRegistryTests(unittest.TestCase):
         profile.update(overrides)
         return profile
 
+    @classmethod
+    def _property_control_engine(cls, root, *, property_type, kind, action="property.set"):
+        projects = root / "projects"
+        profiles = root / "profiles"
+        (projects / "alpha-server").mkdir(parents=True)
+        profiles.mkdir()
+        adapter = cls._adapter()
+        adapter["propertyTypes"] = (
+            {"setting": property_type} if property_type is not None else {}
+        )
+        adapter_path = root / "game_adapters.json"
+        adapter_path.write_text(
+            json.dumps({"games": {"alpha": adapter}}), encoding="utf-8"
+        )
+        binding = {"action": action}
+        if action == "property.set":
+            binding["key"] = "setting"
+        (profiles / "alpha.json").write_text(
+            json.dumps(
+                cls._profile(
+                    controls=[
+                        {
+                            "id": "setting",
+                            "kind": kind,
+                            "label": "Setting",
+                            "risk": (
+                                "configuration"
+                                if action == "property.set"
+                                else "read-only"
+                            ),
+                            "binding": binding,
+                        }
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
+        return ControlEngine(
+            projects_root=projects,
+            profiles_dir=profiles,
+            audit_path=root / "audit.jsonl",
+            adapter_config_path=adapter_path,
+        )
+
     def test_backend_action_policy_matches_checked_in_profile_schema(self):
         schema_path = Path(__file__).parents[1] / "schemas" / "game-control-profile.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -120,6 +164,56 @@ class GameRegistryTests(unittest.TestCase):
                     audit_path=root / "audit.jsonl",
                     adapter_config_path=adapter_path,
                 )
+
+    def test_startup_rejects_non_finite_json_constants_with_file_diagnostics(self):
+        for document, constant in (
+            ("adapter", "NaN"),
+            ("adapter", "Infinity"),
+            ("profile", "NaN"),
+            ("profile", "Infinity"),
+        ):
+            with self.subTest(document=document, constant=constant), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                projects = root / "projects"
+                profiles = root / "profiles"
+                (projects / "alpha-server").mkdir(parents=True)
+                profiles.mkdir()
+                adapter_path = root / "game_adapters.json"
+                profile_path = profiles / "alpha.json"
+                if document == "adapter":
+                    adapter_path.write_text(
+                        json.dumps({"games": {"alpha": self._adapter()}}).replace(
+                            '"defaultPort": 12345', f'"defaultPort": {constant}'
+                        ),
+                        encoding="utf-8",
+                    )
+                    profile_path.write_text(
+                        json.dumps(self._profile()), encoding="utf-8"
+                    )
+                    offending_path = adapter_path
+                else:
+                    adapter_path.write_text(
+                        json.dumps({"games": {"alpha": self._adapter()}}),
+                        encoding="utf-8",
+                    )
+                    profile_path.write_text(
+                        json.dumps(self._profile()).replace(
+                            '"name": "Alpha"', f'"name": {constant}'
+                        ),
+                        encoding="utf-8",
+                    )
+                    offending_path = profile_path
+
+                with self.assertRaisesRegex(
+                    ControlEngineError,
+                    rf"{offending_path.name}: invalid JSON: non-finite numeric constant '{constant}'",
+                ):
+                    ControlEngine(
+                        projects_root=projects,
+                        profiles_dir=profiles,
+                        audit_path=root / "audit.jsonl",
+                        adapter_config_path=adapter_path,
+                    )
 
     def test_startup_validates_every_profile_against_checked_in_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -270,8 +364,8 @@ class GameRegistryTests(unittest.TestCase):
                     adapter_config_path=adapter_path,
                 )
 
-    def test_project_directory_rejects_traversal_and_absolute_paths(self):
-        for unsafe_path in ("../outside", "/tmp/outside"):
+    def test_project_directory_rejects_root_equality_traversal_and_absolute_paths(self):
+        for unsafe_path in (".", "../outside", "/tmp/outside"):
             with self.subTest(projectDir=unsafe_path), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 projects = root / "projects"
@@ -350,8 +444,134 @@ class GameRegistryTests(unittest.TestCase):
                         adapter_config_path=adapter_path,
                     )
 
-    def test_required_scripts_reject_missing_non_executable_and_symlink_files(self):
-        for state in ("missing", "non-executable", "symlink"):
+    def test_startup_rejects_empty_command_sequence_at_exact_json_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            projects.mkdir()
+            profiles.mkdir()
+            adapter_path = root / "game_adapters.json"
+            adapter_path.write_text(
+                json.dumps(
+                    {
+                        "games": {
+                            "alpha": self._adapter(
+                                commands={"service.start": []}
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (profiles / "alpha.json").write_text(
+                json.dumps(
+                    self._profile(
+                        controls=[
+                            {
+                                "id": "start",
+                                "kind": "button",
+                                "label": "Start",
+                                "risk": "service",
+                                "binding": {"action": "service.start"},
+                            }
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ControlEngineError,
+                r"game_adapters\.json: \$\.games\.alpha\.commands\.service\.start: .*non-empty",
+            ):
+                ControlEngine(
+                    projects_root=projects,
+                    profiles_dir=profiles,
+                    audit_path=root / "audit.jsonl",
+                    adapter_config_path=adapter_path,
+                )
+
+    def test_catalog_only_game_with_absent_project_starts_but_plan_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            projects.mkdir()
+            profiles.mkdir()
+            adapter_path = root / "game_adapters.json"
+            adapter_path.write_text(
+                json.dumps(
+                    {
+                        "games": {
+                            "alpha": self._adapter(
+                                commands={"service.start": [["start.sh", 30]]}
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (profiles / "alpha.json").write_text(
+                json.dumps(
+                    self._profile(
+                        controls=[
+                            {
+                                "id": "start",
+                                "kind": "button",
+                                "label": "Start",
+                                "risk": "service",
+                                "binding": {"action": "service.start"},
+                            }
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+            )
+
+            self.assertEqual(["alpha"], [game["id"] for game in engine.catalog()["games"]])
+            with self.assertRaisesRegex(
+                ControlEngineError,
+                r"action unavailable for alpha: approved project path is unavailable",
+            ):
+                engine.plan(
+                    game_id="alpha",
+                    control_id="start",
+                    value=None,
+                    actor="test",
+                )
+
+    def test_installed_game_with_unavailable_required_script_is_not_registry_fatal(self):
+        cases = (
+            (
+                "missing",
+                "start.sh",
+                r"approved action script is no longer a regular executable non-symlink file: start\.sh",
+            ),
+            (
+                "non-executable",
+                "start.sh",
+                r"approved action script is no longer a regular executable non-symlink file: start\.sh",
+            ),
+            (
+                "final-symlink",
+                "start.sh",
+                r"approved action script is no longer a regular executable non-symlink file: start\.sh",
+            ),
+            (
+                "ancestor-symlink",
+                "scripts/start.sh",
+                r"approved action script path contains a symlink component",
+            ),
+        )
+        for state, script_name, diagnostic in cases:
             with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 projects = root / "projects"
@@ -359,23 +579,29 @@ class GameRegistryTests(unittest.TestCase):
                 game_dir = projects / "alpha-server"
                 game_dir.mkdir(parents=True)
                 profiles.mkdir()
-                script = game_dir / "start.sh"
+                script = game_dir / script_name
                 if state == "non-executable":
                     script.write_text("#!/bin/sh\n", encoding="utf-8")
                     script.chmod(0o644)
-                elif state == "symlink":
+                elif state == "final-symlink":
                     target = game_dir / "real-start.sh"
                     target.write_text("#!/bin/sh\n", encoding="utf-8")
                     target.chmod(0o755)
                     script.symlink_to(target.name)
-
+                elif state == "ancestor-symlink":
+                    real_scripts = game_dir / "real-scripts"
+                    real_scripts.mkdir()
+                    target = real_scripts / "start.sh"
+                    target.write_text("#!/bin/sh\n", encoding="utf-8")
+                    target.chmod(0o755)
+                    script.parent.symlink_to(real_scripts.name, target_is_directory=True)
                 adapter_path = root / "game_adapters.json"
                 adapter_path.write_text(
                     json.dumps(
                         {
                             "games": {
                                 "alpha": self._adapter(
-                                    commands={"service.start": [["start.sh", 30]]}
+                                    commands={"service.start": [[script_name, 30]]}
                                 )
                             }
                         }
@@ -399,23 +625,31 @@ class GameRegistryTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
+                engine = ControlEngine(
+                    projects_root=projects,
+                    profiles_dir=profiles,
+                    audit_path=root / "audit.jsonl",
+                    adapter_config_path=adapter_path,
+                )
+
+                self.assertEqual("alpha", engine.catalog()["games"][0]["id"])
                 with self.assertRaisesRegex(
                     ControlEngineError,
-                    r"game_adapters\.json: \$\.games\.alpha\.commands\.service\.start\[0\]\[0\]: required action script must be a regular executable non-symlink file",
+                    rf"action unavailable for alpha: {diagnostic}",
                 ):
-                    ControlEngine(
-                        projects_root=projects,
-                        profiles_dir=profiles,
-                        audit_path=root / "audit.jsonl",
-                        adapter_config_path=adapter_path,
+                    engine.plan(
+                        game_id="alpha",
+                        control_id="start",
+                        value=None,
+                        actor="test",
                     )
 
-    def test_startup_validates_scripts_for_adapter_actions_without_profile_controls(self):
+    def test_absent_catalog_project_does_not_skip_script_lexical_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             projects = root / "projects"
             profiles = root / "profiles"
-            (projects / "alpha-server").mkdir(parents=True)
+            projects.mkdir()
             profiles.mkdir()
             adapter_path = root / "game_adapters.json"
             adapter_path.write_text(
@@ -423,7 +657,7 @@ class GameRegistryTests(unittest.TestCase):
                     {
                         "games": {
                             "alpha": self._adapter(
-                                commands={"service.start": [["missing.sh", 30]]}
+                                commands={"service.start": [["../outside.sh", 30]]}
                             )
                         }
                     }
@@ -431,25 +665,12 @@ class GameRegistryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (profiles / "alpha.json").write_text(
-                json.dumps(
-                    self._profile(
-                        controls=[
-                            {
-                                "id": "refresh",
-                                "kind": "button",
-                                "label": "Refresh",
-                                "risk": "read-only",
-                                "binding": {"action": "ui.refresh"},
-                            }
-                        ]
-                    )
-                ),
-                encoding="utf-8",
+                json.dumps(self._profile()), encoding="utf-8"
             )
 
             with self.assertRaisesRegex(
                 ControlEngineError,
-                r"game_adapters\.json: \$\.games\.alpha\.commands\.service\.start\[0\]\[0\]: required action script must be a regular executable non-symlink file",
+                r"game_adapters\.json: \$\.games\.alpha\.commands\.service\.start\[0\]\[0\]: must resolve beneath game directory",
             ):
                 ControlEngine(
                     projects_root=projects,
@@ -458,7 +679,205 @@ class GameRegistryTests(unittest.TestCase):
                     adapter_config_path=adapter_path,
                 )
 
-    def test_apply_rejects_script_swapped_to_symlink_after_startup(self):
+    def test_property_control_kind_matches_adapter_property_type_matrix(self):
+        allowed = {
+            "integer": {"slider", "number"},
+            "boolean": {"switch"},
+            "string": {"text", "select"},
+        }
+        mutating_kinds = {"slider", "number", "switch", "text", "select", "readonly"}
+        for property_type, allowed_kinds in allowed.items():
+            for kind in sorted(mutating_kinds):
+                with self.subTest(property_type=property_type, kind=kind), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    if kind in allowed_kinds:
+                        engine = self._property_control_engine(
+                            root, property_type=property_type, kind=kind
+                        )
+                        self.assertEqual(("alpha",), engine._registry.game_ids)
+                    else:
+                        with self.assertRaisesRegex(
+                            ControlEngineError,
+                            rf"alpha\.json: \$\.controls\[0\]\.kind: control kind '{kind}' is incompatible with property type '{property_type}' for binding key 'setting'",
+                        ):
+                            self._property_control_engine(
+                                root, property_type=property_type, kind=kind
+                            )
+
+    def test_readonly_control_remains_valid_with_nonmutating_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._property_control_engine(
+                Path(tmp),
+                property_type=None,
+                kind="readonly",
+                action="ui.refresh",
+            )
+
+            self.assertEqual("readonly", engine.catalog()["games"][0]["controls"][0]["kind"])
+
+    def test_property_plan_rejects_missing_properties_file_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            (projects / "alpha-server").mkdir(parents=True)
+            profiles.mkdir()
+            adapter = self._adapter()
+            adapter["propertyTypes"] = {"setting": "integer"}
+            adapter_path = root / "game_adapters.json"
+            adapter_path.write_text(
+                json.dumps({"games": {"alpha": adapter}}), encoding="utf-8"
+            )
+            (profiles / "alpha.json").write_text(
+                json.dumps(
+                    self._profile(
+                        controls=[
+                            {
+                                "id": "setting",
+                                "kind": "number",
+                                "label": "Setting",
+                                "risk": "configuration",
+                                "binding": {
+                                    "action": "property.set",
+                                    "key": "setting",
+                                },
+                            }
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+            )
+
+            with self.assertRaisesRegex(
+                ControlEngineError,
+                r"action unavailable for alpha: approved property path is unavailable",
+            ):
+                engine.plan(
+                    game_id="alpha",
+                    control_id="setting",
+                    value=2,
+                    actor="test",
+                )
+
+    def test_apply_revalidates_unavailable_script_states_before_runner(self):
+        cases = (
+            (
+                "missing",
+                r"approved action script is no longer a regular executable non-symlink file: backup\.sh",
+            ),
+            (
+                "non-executable",
+                r"approved action script is no longer a regular executable non-symlink file: backup\.sh",
+            ),
+            (
+                "final-symlink",
+                r"approved action script is no longer a regular executable non-symlink file: backup\.sh",
+            ),
+            (
+                "ancestor-symlink",
+                r"approved action script path contains a symlink component",
+            ),
+        )
+        for state, diagnostic in cases:
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                projects = root / "projects"
+                profiles = root / "profiles"
+                game_dir = projects / "alpha-server"
+                scripts_dir = game_dir / "scripts"
+                scripts_dir.mkdir(parents=True)
+                profiles.mkdir()
+                script = scripts_dir / "backup.sh"
+                script.write_text("#!/bin/sh\n", encoding="utf-8")
+                script.chmod(0o755)
+                outside = root / "outside.sh"
+                outside.write_text("#!/bin/sh\n", encoding="utf-8")
+                outside.chmod(0o755)
+                adapter_path = root / "game_adapters.json"
+                adapter_path.write_text(
+                    json.dumps(
+                        {
+                            "games": {
+                                "alpha": self._adapter(
+                                    commands={
+                                        "backup.create": [["scripts/backup.sh", 30]]
+                                    }
+                                )
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (profiles / "alpha.json").write_text(
+                    json.dumps(
+                        self._profile(
+                            controls=[
+                                {
+                                    "id": "backup",
+                                    "kind": "button",
+                                    "label": "Backup",
+                                    "risk": "safe-mutation",
+                                    "binding": {"action": "backup.create"},
+                                }
+                            ]
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                calls = []
+
+                def fake_runner(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return {"ok": True, "exitCode": 0, "output": "unexpected"}
+
+                engine = ControlEngine(
+                    projects_root=projects,
+                    profiles_dir=profiles,
+                    audit_path=root / "audit.jsonl",
+                    adapter_config_path=adapter_path,
+                    command_runner=fake_runner,
+                )
+                plan = engine.plan(
+                    game_id="alpha",
+                    control_id="backup",
+                    value=None,
+                    actor="test",
+                )
+                if state == "missing":
+                    script.unlink()
+                elif state == "non-executable":
+                    script.chmod(0o644)
+                elif state == "final-symlink":
+                    script.unlink()
+                    script.symlink_to(outside)
+                else:
+                    original_scripts = game_dir / "scripts-original"
+                    scripts_dir.rename(original_scripts)
+                    replacement_scripts = game_dir / "replacement-scripts"
+                    replacement_scripts.mkdir()
+                    replacement = replacement_scripts / "backup.sh"
+                    replacement.write_text("#!/bin/sh\n", encoding="utf-8")
+                    replacement.chmod(0o755)
+                    scripts_dir.symlink_to(
+                        replacement_scripts.name, target_is_directory=True
+                    )
+
+                with self.assertRaisesRegex(ControlEngineError, diagnostic):
+                    engine.apply(
+                        plan_id=plan["planId"],
+                        actor="test",
+                        confirmed=True,
+                        plan_digest=plan["planDigest"],
+                    )
+                self.assertEqual([], calls)
+
+    def test_apply_rejects_project_directory_swapped_to_outside_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             projects = root / "projects"
@@ -469,9 +888,13 @@ class GameRegistryTests(unittest.TestCase):
             script = game_dir / "backup.sh"
             script.write_text("#!/bin/sh\n", encoding="utf-8")
             script.chmod(0o755)
-            outside = root / "outside.sh"
-            outside.write_text("#!/bin/sh\n", encoding="utf-8")
-            outside.chmod(0o755)
+            outside = root / "outside-game"
+            outside.mkdir()
+            outside_script = outside / "backup.sh"
+            outside_script.write_text("#!/bin/sh\n", encoding="utf-8")
+            outside_script.chmod(0o755)
+            sentinel = outside / "sentinel.bin"
+            sentinel.write_bytes(b"outside-must-not-change")
             adapter_path = root / "game_adapters.json"
             adapter_path.write_text(
                 json.dumps(
@@ -502,30 +925,25 @@ class GameRegistryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             calls = []
-
-            def fake_runner(*args, **kwargs):
-                calls.append((args, kwargs))
-                return {"ok": True, "exitCode": 0, "output": "unexpected"}
-
             engine = ControlEngine(
                 projects_root=projects,
                 profiles_dir=profiles,
                 audit_path=root / "audit.jsonl",
                 adapter_config_path=adapter_path,
-                command_runner=fake_runner,
+                command_runner=lambda *args, **kwargs: (
+                    calls.append((args, kwargs))
+                    or {"ok": True, "exitCode": 0, "output": "unexpected"}
+                ),
             )
             plan = engine.plan(
-                game_id="alpha",
-                control_id="backup",
-                value=None,
-                actor="test",
+                game_id="alpha", control_id="backup", value=None, actor="test"
             )
-            script.unlink()
-            script.symlink_to(outside)
+            game_dir.rename(projects / "alpha-server-original")
+            game_dir.symlink_to(outside, target_is_directory=True)
 
             with self.assertRaisesRegex(
                 ControlEngineError,
-                r"approved action script is no longer a regular executable non-symlink file: backup\.sh",
+                r"approved project path contains a symlink component",
             ):
                 engine.apply(
                     plan_id=plan["planId"],
@@ -534,6 +952,149 @@ class GameRegistryTests(unittest.TestCase):
                     plan_digest=plan["planDigest"],
                 )
             self.assertEqual([], calls)
+            self.assertEqual(b"outside-must-not-change", sentinel.read_bytes())
+
+    def test_apply_rejects_parent_swapped_to_outside_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            container = root / "container"
+            projects = container / "projects"
+            profiles = root / "profiles"
+            game_dir = projects / "alpha-server"
+            game_dir.mkdir(parents=True)
+            profiles.mkdir()
+            script = game_dir / "backup.sh"
+            script.write_text("#!/bin/sh\n", encoding="utf-8")
+            script.chmod(0o755)
+            outside_container = root / "outside-container"
+            outside_game = outside_container / "projects" / "alpha-server"
+            outside_game.mkdir(parents=True)
+            outside_script = outside_game / "backup.sh"
+            outside_script.write_text("#!/bin/sh\n", encoding="utf-8")
+            outside_script.chmod(0o755)
+            sentinel = outside_game / "sentinel.bin"
+            sentinel.write_bytes(b"outside-parent-must-not-change")
+            adapter_path = root / "game_adapters.json"
+            adapter_path.write_text(
+                json.dumps(
+                    {
+                        "games": {
+                            "alpha": self._adapter(
+                                commands={"backup.create": [["backup.sh", 30]]}
+                            )
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (profiles / "alpha.json").write_text(
+                json.dumps(
+                    self._profile(
+                        controls=[
+                            {
+                                "id": "backup",
+                                "kind": "button",
+                                "label": "Backup",
+                                "risk": "safe-mutation",
+                                "binding": {"action": "backup.create"},
+                            }
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+                command_runner=lambda *args, **kwargs: (
+                    calls.append((args, kwargs))
+                    or {"ok": True, "exitCode": 0, "output": "unexpected"}
+                ),
+            )
+            plan = engine.plan(
+                game_id="alpha", control_id="backup", value=None, actor="test"
+            )
+            container.rename(root / "container-original")
+            container.symlink_to(outside_container, target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                ControlEngineError,
+                r"approved project path contains a symlink component",
+            ):
+                engine.apply(
+                    plan_id=plan["planId"],
+                    actor="test",
+                    confirmed=True,
+                    plan_digest=plan["planDigest"],
+                )
+            self.assertEqual([], calls)
+            self.assertEqual(b"outside-parent-must-not-change", sentinel.read_bytes())
+
+    def test_property_apply_uses_validated_project_path_after_symlink_swap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            game_dir = projects / "alpha-server"
+            game_dir.mkdir(parents=True)
+            profiles.mkdir()
+            properties = game_dir / "server.properties"
+            properties.write_text("setting=1\n", encoding="utf-8")
+            outside = root / "outside-game"
+            outside.mkdir()
+            outside_properties = outside / "server.properties"
+            outside_properties.write_bytes(b"setting=9\n")
+            adapter = self._adapter()
+            adapter["propertyTypes"] = {"setting": "integer"}
+            adapter_path = root / "game_adapters.json"
+            adapter_path.write_text(
+                json.dumps({"games": {"alpha": adapter}}), encoding="utf-8"
+            )
+            (profiles / "alpha.json").write_text(
+                json.dumps(
+                    self._profile(
+                        controls=[
+                            {
+                                "id": "setting",
+                                "kind": "number",
+                                "label": "Setting",
+                                "risk": "configuration",
+                                "binding": {
+                                    "action": "property.set",
+                                    "key": "setting",
+                                },
+                            }
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+            )
+            plan = engine.plan(
+                game_id="alpha", control_id="setting", value=2, actor="test"
+            )
+            game_dir.rename(projects / "alpha-server-original")
+            game_dir.symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                ControlEngineError,
+                r"approved project path contains a symlink component",
+            ):
+                engine.apply(
+                    plan_id=plan["planId"],
+                    actor="test",
+                    confirmed=True,
+                    plan_digest=plan["planDigest"],
+                )
+            self.assertEqual(b"setting=9\n", outside_properties.read_bytes())
 
     def test_profile_controls_may_only_reference_adapter_declared_actions(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -25,6 +25,7 @@
               "patternProperties": {
                 "^(service\\.(start|stop|restart)|backup\\.create|property\\.set)$": {
                   "type": "array",
+                  "minItems": 1,
                   "items": {
                     "type": "array",
                     "prefixItems": [

@@ -46,6 +46,197 @@ def _create_executable_adapter_scripts(project_dir):
 
 
 class ControlEngineCatalogTests(unittest.TestCase):
+    def test_checked_in_registry_loads_read_only_against_real_projects_root(self):
+        repository_root = Path(__file__).parents[1]
+        audit_path = repository_root / "tests" / ".real-config-audit-must-not-exist.jsonl"
+        self.assertFalse(audit_path.exists())
+
+        engine = ControlEngine(
+            projects_root=Path("/run/media/zim/a drive/Hermes/Projects"),
+            profiles_dir=repository_root / "game_profiles",
+            audit_path=audit_path,
+            adapter_config_path=repository_root / "game_adapters.json",
+        )
+        catalog = engine.catalog()
+
+        game_ids = {game["id"] for game in catalog["games"]}
+        self.assertTrue({"minecraft", "palworld"}.issubset(game_ids))
+        self.assertTrue(
+            {
+                "valheim",
+                "cs2",
+                "terraria",
+                "dont-starve-together",
+                "satisfactory",
+                "enshrouded",
+                "sons-of-the-forest",
+            }.issubset(game_ids)
+        )
+        self.assertFalse(audit_path.exists())
+
+    def test_catalog_game_view_and_plan_use_startup_profile_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            minecraft = projects / "minecraft-server"
+            minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
+            profiles.mkdir()
+            (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
+            profile_path = profiles / "minecraft.json"
+            profile = {
+                "schemaVersion": "1.0",
+                "id": "minecraft",
+                "name": "Validated Minecraft",
+                "controls": [
+                    {
+                        "id": "backup-now",
+                        "kind": "button",
+                        "label": "Create backup",
+                        "risk": "safe-mutation",
+                        "binding": {"action": "backup.create"},
+                    }
+                ],
+            }
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            calls = []
+
+            def fake_runner(argv, *, cwd, timeout):
+                calls.append((argv, cwd, timeout))
+                return {"ok": True, "exitCode": 0, "output": "snapshot command"}
+
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                command_runner=fake_runner,
+            )
+            profile["name"] = "Unvalidated edit"
+            profile["controls"][0]["risk"] = "read-only"
+            profile["controls"][0]["binding"]["action"] = "service.start"
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+            catalog = engine.catalog()
+            view = engine.game_view("minecraft")
+            plan = engine.plan(
+                game_id="minecraft",
+                control_id="backup-now",
+                value=None,
+                actor="snapshot-test",
+            )
+
+            self.assertEqual("Validated Minecraft", catalog["games"][0]["name"])
+            self.assertEqual("Validated Minecraft", view["name"])
+            self.assertEqual("backup.create", plan["action"])
+            self.assertEqual("safe-mutation", plan["risk"])
+            result = engine.apply(
+                plan_id=plan["planId"],
+                plan_digest=plan["planDigest"],
+                actor="snapshot-test",
+                confirmed=True,
+            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                [([str(minecraft / "backup.sh")], minecraft, 300)], calls
+            )
+
+    def test_catalog_keeps_validated_profiles_after_source_file_is_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            minecraft = projects / "minecraft-server"
+            minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
+            profiles.mkdir()
+            (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
+            profile_path = profiles / "minecraft.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "1.0",
+                        "id": "minecraft",
+                        "name": "Minecraft Java",
+                        "controls": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+            )
+            profile_path.unlink()
+
+            self.assertEqual(
+                ["minecraft"], [game["id"] for game in engine.catalog()["games"]]
+            )
+            self.assertEqual("minecraft", engine.game_view("minecraft")["id"])
+
+    def test_registry_and_game_views_return_defensive_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            minecraft = projects / "minecraft-server"
+            minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
+            profiles.mkdir()
+            (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
+            (minecraft / "server.properties").write_text(
+                "max-players=12\n", encoding="utf-8"
+            )
+            (profiles / "minecraft.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "1.0",
+                        "id": "minecraft",
+                        "name": "Minecraft Java",
+                        "controls": [
+                            {
+                                "id": "max-players",
+                                "kind": "slider",
+                                "label": "Max players",
+                                "risk": "configuration",
+                                "min": 1,
+                                "max": 50,
+                                "step": 1,
+                                "binding": {
+                                    "action": "property.set",
+                                    "key": "max-players",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            engine = ControlEngine(
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+            )
+
+            adapters = engine._registry.adapters
+            adapters["minecraft"]["propertyTypes"]["max-players"] = "boolean"
+            profiles_copy = engine._registry.profiles
+            profiles_copy["minecraft"]["controls"][0]["binding"]["key"] = "difficulty"
+            first_view = engine.game_view("minecraft")
+            first_view["controls"][0]["binding"]["key"] = "difficulty"
+
+            second_view = engine.game_view("minecraft")
+            plan = engine.plan(
+                game_id="minecraft",
+                control_id="max-players",
+                value=20,
+                actor="copy-test",
+            )
+            self.assertEqual(12, second_view["controls"][0]["value"])
+            self.assertEqual("max-players", plan["controlId"])
+            self.assertEqual(12, plan["currentValue"])
+
     def test_catalog_resolves_current_minecraft_property_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
