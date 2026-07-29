@@ -5,12 +5,15 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from registry import ACTION_POLICIES, RISK_LEVELS, GameRegistry, RegistryError
 
 
 class ControlEngineError(ValueError):
@@ -42,15 +45,8 @@ class ControlEngine:
         "binding",
     }
     _BINDING_FIELDS = {"action", "key"}
-    _RISKS = {"read-only", "safe", "safe-mutation", "configuration", "service", "disruptive"}
-    _BINDING_ACTIONS = {
-        "property.set",
-        "service.start",
-        "service.stop",
-        "service.restart",
-        "backup.create",
-        "ui.refresh",
-    }
+    _RISKS = set(RISK_LEVELS)
+    _BINDING_ACTIONS = set(ACTION_POLICIES)
     def __init__(
         self,
         *,
@@ -67,20 +63,20 @@ class ControlEngine:
             Path(adapter_config_path) if adapter_config_path
             else self.profiles_dir.parent / "game_adapters.json"
         )
-        self._adapters: dict[str, Any] = {}
-        self._load_adapters()
+        try:
+            self._registry = GameRegistry(
+                projects_root=self.projects_root,
+                profiles_dir=self.profiles_dir,
+                adapter_config_path=self._adapter_config_path,
+            )
+        except RegistryError as exc:
+            raise ControlEngineError(str(exc)) from exc
+        self._adapters = self._registry.adapters
         self._plans: dict[str, dict[str, Any]] = {}
         self._plans_lock = threading.Lock()
         self._game_locks: dict[str, threading.Lock] = {}
         self._command_runner = command_runner or self._default_command_runner
 
-    def _load_adapters(self) -> None:
-        """Load game adapter config from the data-driven JSON file."""
-        if not self._adapter_config_path.is_file():
-            self._adapters = {}
-            return
-        data = json.loads(self._adapter_config_path.read_text(encoding="utf-8"))
-        self._adapters = data.get("games", {})
 
     def _adapter_for(self, game_id: str) -> dict[str, Any]:
         adapter = self._adapters.get(game_id)
@@ -136,6 +132,7 @@ class ControlEngine:
             raise ControlEngineError(f"unknown control: {game_id}.{control_id}")
         proposed = self._validate_value(control, value)
         action = control["binding"]["action"]
+        _backend_risk, requires_confirmation = ACTION_POLICIES[action]
         plan_id = secrets.token_urlsafe(24)
         plan = {
             "ok": True,
@@ -149,7 +146,7 @@ class ControlEngine:
             "proposedValue": proposed,
             "risk": control.get("risk", "safe"),
             "restartRequired": bool(control.get("restartRequired", False)),
-            "requiresConfirmation": action != "ui.refresh",
+            "requiresConfirmation": requires_confirmation,
             "actor": actor or "unknown",
             "expiresAt": time.time() + 300,
             "profileDigest": view["profileDigest"],
@@ -269,8 +266,15 @@ class ControlEngine:
         outputs: list[str] = []
         for argv, cwd, timeout in commands:
             script = Path(argv[0])
-            if not script.is_file():
-                raise ControlEngineError(f"approved action script is missing: {script.name}")
+            try:
+                mode = script.lstat().st_mode
+            except OSError:
+                mode = 0
+            if script.is_symlink() or not stat.S_ISREG(mode) or not mode & 0o111:
+                raise ControlEngineError(
+                    "approved action script is no longer a regular executable "
+                    f"non-symlink file: {script.name}"
+                )
             result = self._command_runner(argv, cwd=cwd, timeout=timeout)
             outputs.append(str(result.get("output", "")))
             if not result.get("ok"):
@@ -282,13 +286,15 @@ class ControlEngine:
         return {"ok": True, "exitCode": 0, "output": "\n".join(item for item in outputs if item)[-4000:]}
 
     def _commands_for(self, game_id: str, action: str) -> list[tuple[list[str], Path, int]]:
-        adapter = self._adapter_for(game_id)
-        commands = adapter.get("commands", {})
-        specs = commands.get(action)
+        self._adapter_for(game_id)
+        specs = self._registry.commands[game_id].get(action)
         if not specs:
             raise ControlEngineError(f"action is not approved for {game_id}: {action}")
-        project_dir = self.projects_root / adapter["projectDir"]
-        return [([str(project_dir / script)], project_dir, timeout) for script, timeout in specs]
+        project_dir = self._registry.project_dirs[game_id]
+        return [
+            ([str(resolved_script)], project_dir, timeout)
+            for _configured_script, resolved_script, timeout in specs
+        ]
 
     @staticmethod
     def _default_command_runner(argv: list[str], *, cwd: Path, timeout: int) -> dict[str, Any]:
