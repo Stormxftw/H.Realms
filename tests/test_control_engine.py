@@ -32,6 +32,19 @@ _MC_ADAPTER = {
 }
 
 
+def _create_executable_adapter_scripts(project_dir):
+    scripts = {
+        script
+        for specs in _MC_ADAPTER["games"]["minecraft"]["commands"].values()
+        for script, _timeout in specs
+    }
+    for script_name in scripts:
+        script = project_dir / script_name
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+
+
 class ControlEngineCatalogTests(unittest.TestCase):
     def test_catalog_resolves_current_minecraft_property_values(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,6 +53,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             profiles = root / "profiles"
             minecraft = projects / "minecraft-server"
             minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             (minecraft / "server.properties").write_text(
@@ -119,6 +133,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             projects = root / "projects"
             profiles = root / "profiles"
             (projects / "minecraft-server").mkdir(parents=True)
+            _create_executable_adapter_scripts(projects / "minecraft-server")
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             (projects / "minecraft-server" / "server.properties").write_text(
@@ -136,21 +151,24 @@ class ControlEngineCatalogTests(unittest.TestCase):
                                 "id": "unsafe",
                                 "kind": "script",
                                 "label": "Run arbitrary code",
-                                "binding": {"action": "shell", "command": "rm -rf /"},
+                                "risk": "read-only",
+                                "binding": {"action": "ui.refresh"},
                             }
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
-            engine = ControlEngine(
-                projects_root=projects,
-                profiles_dir=profiles,
-                audit_path=root / "audit.jsonl",
-            )
 
-            with self.assertRaisesRegex(ValueError, "unsupported control kind"):
-                engine.game_view("minecraft")
+            with self.assertRaisesRegex(
+                ValueError,
+                r"minecraft\.json: \$\.controls\[0\]\.kind: 'script' is not one of",
+            ):
+                ControlEngine(
+                    projects_root=projects,
+                    profiles_dir=profiles,
+                    audit_path=root / "audit.jsonl",
+                )
 
     def test_plan_validates_slider_and_does_not_mutate_properties(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +177,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             profiles = root / "profiles"
             minecraft = projects / "minecraft-server"
             minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             properties = minecraft / "server.properties"
@@ -217,6 +236,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             profiles = root / "profiles"
             minecraft = projects / "minecraft-server"
             minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             properties = minecraft / "server.properties"
@@ -300,6 +320,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             profiles = root / "profiles"
             minecraft = projects / "minecraft-server"
             minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             (minecraft / "server.properties").write_text("difficulty=normal\n", encoding="utf-8")
@@ -363,6 +384,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             projects = root / "projects"
             profiles = root / "profiles"
             (projects / "minecraft-server").mkdir(parents=True)
+            _create_executable_adapter_scripts(projects / "minecraft-server")
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             (projects / "minecraft-server" / "server.properties").write_text(
@@ -390,14 +412,15 @@ class ControlEngineCatalogTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            engine = ControlEngine(
-                projects_root=projects,
-                profiles_dir=profiles,
-                audit_path=root / "audit.jsonl",
-            )
-
-            with self.assertRaisesRegex(ValueError, "unknown control fields"):
-                engine.game_view("minecraft")
+            with self.assertRaisesRegex(
+                ValueError,
+                r"minecraft\.json: \$\.controls\[0\]: Additional properties are not allowed.*command",
+            ):
+                ControlEngine(
+                    projects_root=projects,
+                    profiles_dir=profiles,
+                    audit_path=root / "audit.jsonl",
+                )
 
             profile_path.write_text(
                 json.dumps(
@@ -410,8 +433,15 @@ class ControlEngineCatalogTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "unsupported profile schema"):
-                engine.game_view("minecraft")
+            with self.assertRaisesRegex(
+                ValueError,
+                r"minecraft\.json: \$\.schemaVersion: '1\.0' was expected",
+            ):
+                ControlEngine(
+                    projects_root=projects,
+                    profiles_dir=profiles,
+                    audit_path=root / "audit.jsonl",
+                )
 
     def test_apply_is_bound_to_preview_actor_and_digest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -420,6 +450,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             profiles = root / "profiles"
             minecraft = projects / "minecraft-server"
             minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
             profiles.mkdir()
             (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
             (minecraft / "server.properties").write_text("difficulty=normal\n", encoding="utf-8")

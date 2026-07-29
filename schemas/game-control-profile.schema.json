@@ -32,6 +32,16 @@
         },
         "key": { "type": "string", "pattern": "^[a-z0-9-]+$" }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "action": { "const": "property.set" } },
+            "required": ["action"]
+          },
+          "then": { "required": ["key"] },
+          "else": { "not": { "required": ["key"] } }
+        }
+      ],
       "additionalProperties": false
     },
     "control": {

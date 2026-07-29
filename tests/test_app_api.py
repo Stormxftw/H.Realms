@@ -34,6 +34,18 @@ _MC_ADAPTER = {
 }
 
 
+def _create_executable_adapter_scripts(project_dir):
+    scripts = {
+        script
+        for specs in _MC_ADAPTER["games"]["minecraft"]["commands"].values()
+        for script, _timeout in specs
+    }
+    for script_name in scripts:
+        script = project_dir / script_name
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+
+
 class ControlApiTests(unittest.TestCase):
     def test_http_api_exposes_catalog_and_plan_without_mutating(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -42,6 +54,7 @@ class ControlApiTests(unittest.TestCase):
             profiles = root / "profiles"
             minecraft = projects / "minecraft-server"
             minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
             profiles.mkdir()
             properties = minecraft / "server.properties"
             properties.write_text("max-players=10\n", encoding="utf-8")
