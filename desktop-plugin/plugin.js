@@ -27,6 +27,63 @@ import {
 import { useState } from 'react'
 import { jsx } from 'react/jsx-runtime'
 
+/** @typedef {string | number | boolean | null | undefined} ControlValue */
+/** @typedef {{ action?: string }} ControlBinding */
+/** @typedef {{ label: string, value: string | number | boolean }} ControlOption */
+/**
+ * @typedef {object} Control
+ * @property {string} id
+ * @property {string} label
+ * @property {string} kind
+ * @property {string} [help]
+ * @property {string} [risk]
+ * @property {boolean} [disabled]
+ * @property {string} [enabledWhen]
+ * @property {ControlBinding} [binding]
+ * @property {*} [variant]
+ * @property {number} [max]
+ * @property {number} [min]
+ * @property {number} [step]
+ * @property {number} [maxLength]
+ * @property {string} [unit]
+ * @property {boolean} [restartRequired]
+ * @property {ControlOption[]} [options]
+ * @property {string} [group]
+ * @property {ControlValue} [value]
+ */
+/**
+ * @typedef {object} Game
+ * @property {string} id
+ * @property {string} name
+ * @property {string} [description]
+ * @property {Control[]} [controls]
+ */
+/** @typedef {{ games?: Game[] }} Catalog */
+/**
+ * @typedef {object} ServiceStatus
+ * @property {boolean} [online]
+ * @property {{ uptimeHuman?: string, rssMB?: number }} [process]
+ * @property {{ lan?: string, local?: string, public?: string }} [connect]
+ * @property {{ online?: number, max?: number }} [players]
+ */
+/** @typedef {{ services?: Record<string, ServiceStatus> }} HostStatus */
+/**
+ * @typedef {object} ActionPlan
+ * @property {string} planId
+ * @property {string} planDigest
+ * @property {string} gameId
+ * @property {string} gameName
+ * @property {string} controlId
+ * @property {string} controlLabel
+ * @property {string} risk
+ * @property {ControlValue} currentValue
+ * @property {ControlValue} proposedValue
+ * @property {boolean} restartRequired
+ */
+/** @typedef {{ gameId: string, controlId: string, value: ControlValue }} PlanRequest */
+/** @typedef {{ output?: string }} ApplyResult */
+/** @typedef {{ label: string, detail: string, at: string }} ActivityItem */
+
 const ID = 'game-host-console'
 const ROUTE = '/game-host'
 const ACTOR = 'hermes-desktop'
@@ -36,6 +93,7 @@ const panelStyle = {
   borderRadius: '8px',
 }
 
+/** @param {string | null | undefined} risk */
 function riskVariant(risk) {
   if (risk === 'disruptive') return 'destructive'
   if (risk === 'configuration' || risk === 'service') return 'warn'
@@ -43,17 +101,20 @@ function riskVariant(risk) {
   return 'default'
 }
 
+/** @param {string | null | undefined} risk */
 function riskLabel(risk) {
-  return {
+  const labels = /** @type {Record<string, string>} */ ({
     'read-only': 'Read only',
     safe: 'Safe',
     'safe-mutation': 'Safe change',
     configuration: 'Configuration',
     service: 'Service action',
     disruptive: 'Disruptive',
-  }[risk] || risk || 'Unknown'
+  })
+  return (risk && labels[risk]) || risk || 'Unknown'
 }
 
+/** @param {Control} control @param {boolean} online */
 function isControlEnabled(control, online) {
   if (control.disabled === true) return false
   if (control.enabledWhen === 'online') return online === true
@@ -61,6 +122,7 @@ function isControlEnabled(control, online) {
   return true
 }
 
+/** @param {ActionPlan} plan */
 function confirmationCopy(plan) {
   const before = plan.currentValue === null || plan.currentValue === undefined
     ? 'current state'
@@ -74,11 +136,13 @@ function confirmationCopy(plan) {
   return `${plan.gameName}: ${plan.controlLabel}. Change ${before} to ${after}. Risk: ${plan.risk}.${restart}`
 }
 
+/** @param {ControlValue} value @param {string | undefined} unit */
 function valueLabel(value, unit) {
   if (value === null || value === undefined) return 'Not available'
   return `${value}${unit ? ` ${unit}` : ''}`
 }
 
+/** @param {{ label: string, value: ControlValue }} props */
 function Stat({ label, value }) {
   return jsx('div', {
     style: { ...panelStyle, padding: '12px' },
@@ -89,6 +153,18 @@ function Stat({ label, value }) {
   })
 }
 
+/**
+ * @param {{
+ *   control: Control,
+ *   gameId: string,
+ *   online: boolean,
+ *   value: ControlValue,
+ *   onValue: (value: ControlValue) => void,
+ *   onPreview: (control: Control, value: ControlValue) => void,
+ *   onRefresh: () => void,
+ *   busy: boolean,
+ * }} props
+ */
 function ControlCard({ control, gameId, online, value, onValue, onPreview, onRefresh, busy }) {
   const enabled = isControlEnabled(control, online) && !busy
   const action = control.binding?.action
@@ -110,7 +186,7 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
           disabled: !enabled,
           max: control.max,
           min: control.min,
-          onChange: event => onValue(Number(event.target.value)),
+          onChange: (/** @type {import('react').ChangeEvent<HTMLInputElement>} */ event) => onValue(Number(event.target.value)),
           step: control.step || 1,
           style: { accentColor: 'var(--ui-accent)', flex: 1 },
           type: 'range',
@@ -135,7 +211,7 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
           'aria-label': control.label,
           checked: value === true,
           disabled: !enabled,
-          onCheckedChange: checked => onValue(Boolean(checked)),
+          onCheckedChange: (/** @type {boolean} */ checked) => onValue(Boolean(checked)),
         }, 'switch'),
       ],
     }, 'switch-row'))
@@ -177,7 +253,7 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
       max: control.max,
       maxLength: control.maxLength,
       min: control.min,
-      onChange: event => onValue(control.kind === 'number' ? Number(event.target.value) : event.target.value),
+      onChange: (/** @type {import('react').ChangeEvent<HTMLInputElement>} */ event) => onValue(control.kind === 'number' ? Number(event.target.value) : event.target.value),
       step: control.step,
       type: control.kind === 'number' ? 'number' : 'text',
       value: value ?? '',
@@ -225,42 +301,43 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
   })
 }
 
+/** @param {import('@hermes/plugin-sdk').PluginContext} ctx */
 function createGameHostPage(ctx) {
   return function GameHostPage() {
     const viewport = useValue(host.state.viewport)
     const queryClient = useQueryClient()
     const [selectedGameId, setSelectedGameId] = useState(() => ctx.storage.get('selectedGame', 'minecraft'))
-    const [drafts, setDrafts] = useState({})
-    const [pendingPlan, setPendingPlan] = useState(null)
+    const [drafts, setDrafts] = useState(/** @type {Record<string, ControlValue>} */ ({}))
+    const [pendingPlan, setPendingPlan] = useState(/** @type {ActionPlan | null} */ (null))
     const [confirmPhrase, setConfirmPhrase] = useState('')
-    const [activity, setActivity] = useState([])
+    const [activity, setActivity] = useState(/** @type {ActivityItem[]} */ ([]))
 
     const statusQuery = useQuery({
       queryKey: [ctx.source, 'status'],
-      queryFn: () => ctx.rest('/proxy/api/status'),
+      queryFn: () => /** @type {Promise<HostStatus>} */ (ctx.rest('/proxy/api/status')),
       refetchInterval: 10_000,
       retry: 1,
     })
     const catalogQuery = useQuery({
       queryKey: [ctx.source, 'catalog'],
-      queryFn: () => ctx.rest('/proxy/api/controls'),
+      queryFn: () => /** @type {Promise<Catalog>} */ (ctx.rest('/proxy/api/controls')),
       refetchInterval: 30_000,
       retry: 1,
     })
 
     const planMutation = useMutation({
-      mutationFn: body => ctx.rest('/proxy/api/control/plan', {
+      mutationFn: (/** @type {PlanRequest} */ body) => /** @type {Promise<ActionPlan>} */ (ctx.rest('/proxy/api/control/plan', {
         method: 'POST',
         body: { ...body, actor: ACTOR },
         timeoutMs: 15_000,
-      }),
+      })),
     })
     const applyMutation = useMutation({
-      mutationFn: plan => ctx.rest('/proxy/api/control/apply', {
+      mutationFn: (/** @type {ActionPlan} */ plan) => /** @type {Promise<ApplyResult>} */ (ctx.rest('/proxy/api/control/apply', {
         method: 'POST',
         body: { planId: plan.planId, planDigest: plan.planDigest, confirmed: true, actor: ACTOR },
         timeoutMs: 320_000,
-      }),
+      })),
     })
 
     const catalog = catalogQuery.data
@@ -271,20 +348,24 @@ function createGameHostPage(ctx) {
     const online = service?.online === true
     const narrow = viewport?.narrow === true
 
+    /** @param {string} gameId */
     function selectGame(gameId) {
       setSelectedGameId(gameId)
       ctx.storage.set('selectedGame', gameId)
     }
 
+    /** @param {Control} control */
     function draftKey(control) {
       return `${game?.id || 'unknown'}:${control.id}`
     }
 
+    /** @param {Control} control */
     function currentValue(control) {
       const key = draftKey(control)
       return Object.prototype.hasOwnProperty.call(drafts, key) ? drafts[key] : control.value
     }
 
+    /** @param {Control} control @param {ControlValue} value */
     function setCurrentValue(control, value) {
       const key = draftKey(control)
       setDrafts(previous => ({ ...previous, [key]: value }))
@@ -298,6 +379,7 @@ function createGameHostPage(ctx) {
       if (showToast) host.notify({ kind: 'success', message: 'Game server state refreshed.' })
     }
 
+    /** @param {Control} control @param {ControlValue} value */
     async function preview(control, value) {
       try {
         const plan = await planMutation.mutateAsync({
@@ -364,11 +446,12 @@ function createGameHostPage(ctx) {
 
     const process = service?.process || {}
     const connect = service?.connect || {}
-    const groups = new Map()
+    const groups = /** @type {Map<string, Control[]>} */ (new Map())
     for (const control of game.controls || []) {
       const name = control.group || 'Controls'
-      if (!groups.has(name)) groups.set(name, [])
-      groups.get(name).push(control)
+      const controls = groups.get(name)
+      if (controls) controls.push(control)
+      else groups.set(name, [control])
     }
 
     const navigation = jsx('aside', {
@@ -478,7 +561,7 @@ function createGameHostPage(ctx) {
                   online,
                   onPreview: preview,
                   onRefresh: () => refreshAll(true),
-                  onValue: value => setCurrentValue(control, value),
+                  onValue: (/** @type {ControlValue} */ value) => setCurrentValue(control, value),
                   value: currentValue(control),
                 }, control.id)),
               }, 'controls'),
@@ -530,7 +613,7 @@ function createGameHostPage(ctx) {
                         jsx('label', { className: 'text-xs font-medium', children: `Type ${pendingPlan.gameName} to continue` }, 'label'),
                         jsx(Input, {
                           autoComplete: 'off',
-                          onChange: event => setConfirmPhrase(event.target.value),
+                          onChange: (/** @type {import('react').ChangeEvent<HTMLInputElement>} */ event) => setConfirmPhrase(event.target.value),
                           value: confirmPhrase,
                         }, 'input'),
                       ],
@@ -555,7 +638,7 @@ function createGameHostPage(ctx) {
   }
 }
 
-export default {
+const plugin = /** @type {import('@hermes/plugin-sdk').HermesPlugin} */ ({
   id: ID,
   name: 'Game Host Console',
   defaultEnabled: false,
@@ -586,4 +669,6 @@ export default {
       },
     ])
   },
-}
+})
+
+export default plugin
