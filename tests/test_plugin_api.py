@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import io
+import json
 import unittest
 import urllib.error
 from email.message import Message
@@ -8,15 +9,18 @@ from pathlib import Path
 from unittest import mock
 
 
-MODULE_PATH = Path(__file__).parents[1] / "hermes-plugin" / "dashboard" / "plugin_api.py"
+PLUGIN_DIR = Path(__file__).parents[1] / "hermes-plugin" / "dashboard"
+MANIFEST_PATH = PLUGIN_DIR / "manifest.json"
+MODULE_PATH = PLUGIN_DIR / "plugin_api.py"
+PLUGIN_PREFIX = "/api/plugins/game-host-console"
 
 
-def load_plugin_api():
+def load_plugin_api(module_path=MODULE_PATH):
     try:
         import fastapi  # noqa: F401
     except ModuleNotFoundError:
         return None
-    spec = importlib.util.spec_from_file_location("game_host_plugin_api", MODULE_PATH)
+    spec = importlib.util.spec_from_file_location("game_host_plugin_api", module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -110,19 +114,66 @@ class PluginApiTests(unittest.TestCase):
                 else:
                     self.assertEqual(0, rule.max_body)
 
-    def test_authenticated_proxy_routes_register_only_get_and_post(self):
-        module = load_plugin_api()
+    def test_manifest_plugin_api_mounts_authenticated_get_and_post_proxy_routes(self):
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("plugin_api.py", manifest["api"])
+        module_path = (MANIFEST_PATH.parent / manifest["api"]).resolve()
+        self.assertEqual(MODULE_PATH.resolve(), module_path)
+
+        module = load_plugin_api(module_path)
         if module is None:
             self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+        if module.__file__ is None:
+            self.fail("manifest API module did not load from a file")
+        self.assertEqual(module_path, Path(module.__file__).resolve())
+
+        from fastapi import Depends, FastAPI, HTTPException, Request
+        from fastapi.routing import APIRoute
+        from httpx import ASGITransport, AsyncClient
+
+        def require_authentication(request: Request):
+            if request.headers.get("authorization") != "Bearer review-session":
+                raise HTTPException(status_code=401, detail="Authentication required")
+
+        host = FastAPI()
+        host.include_router(
+            module.router,
+            prefix=PLUGIN_PREFIX,
+            dependencies=[Depends(require_authentication)],
+        )
 
         proxy_methods = {
             method
-            for route in module.router.routes
-            if route.path == "/proxy/{path:path}"
+            for route in host.routes
+            if isinstance(route, APIRoute)
+            if route.path == f"{PLUGIN_PREFIX}/proxy/{{path:path}}"
             for method in route.methods
         }
-
         self.assertEqual({"GET", "POST"}, proxy_methods)
+
+        async def request_proxy():
+            transport = ASGITransport(app=host)
+            async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+                unauthenticated = await client.get(f"{PLUGIN_PREFIX}/proxy/health")
+                authenticated = await client.get(
+                    f"{PLUGIN_PREFIX}/proxy/health",
+                    headers={"Authorization": "Bearer review-session"},
+                )
+            return unauthenticated, authenticated
+
+        upstream = UpstreamResponse(b'{"status":"ok"}')
+        with mock.patch.object(module.urllib.request, "urlopen", return_value=upstream) as urlopen:
+            unauthenticated, authenticated = asyncio.run(request_proxy())
+
+        self.assertEqual(401, unauthenticated.status_code)
+        self.assertEqual(200, authenticated.status_code)
+        self.assertEqual({"status": "ok"}, authenticated.json())
+        urlopen.assert_called_once()
+        request = urlopen.call_args.args[0]
+        self.assertEqual("GET", request.get_method())
+        self.assertEqual(f"{module.SERVICE_BASE}/health", request.full_url)
+        rule = module._proxy_rule("GET", "health")
+        self.assertEqual([rule.max_response + 1], upstream.stream.read_sizes)
 
     def test_success_response_limit_uses_a_bounded_upstream_read(self):
         module = load_plugin_api()
