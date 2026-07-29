@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.hermes/game-adapter-config.schema.json",
+  "title": "Hermes Game Host Adapter Config",
+  "description": "Data-driven mapping of game profiles to backend adapter scripts, process detection, and property types. Defines the approved boundary between declarative profiles and executable actions.",
+  "type": "object",
+  "required": ["games"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "description": { "type": "string" },
+    "games": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z0-9-]+$": {
+          "type": "object",
+          "required": ["projectDir", "commands", "processSearch", "defaultPort"],
+          "properties": {
+            "projectDir": {
+              "type": "string",
+              "description": "Subdirectory under PROJECTS_ROOT containing this game's server files and scripts"
+            },
+            "commands": {
+              "type": "object",
+              "description": "Approved actions mapped to script sequences. Each value is a list of [script, timeout] tuples.",
+              "patternProperties": {
+                "^(service\\.(start|stop|restart)|backup\\.create|property\\.set)$": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "prefixItems": [
+                      { "type": "string", "description": "Script path relative to projectDir" },
+                      { "type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds" }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "propertyTypes": {
+              "type": "object",
+              "description": "Map of server.properties keys to their types. Only keys listed here can be mutated via property.set.",
+              "patternProperties": {
+                "^[a-z0-9_.-]+$": {
+                  "enum": ["string", "integer", "boolean", "float"]
+                }
+              },
+              "additionalProperties": false
+            },
+            "statusCollector": {
+              "enum": ["minecraft_ping", "steam_query", "process_only"],
+              "description": "How to collect live server status: minecraft_ping uses the MC server list protocol, steam_query uses Steam A2S_INFO, process_only just checks if the process is alive."
+            },
+            "processSearch": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Substring to search for in /proc/*/cmdline to detect if the server is running"
+            },
+            "defaultPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Default game port for status display"
+            },
+            "portProtocol": {
+              "enum": ["tcp", "udp"],
+              "description": "Transport protocol for the game port"
+            },
+            "steamAppId": {
+              "type": "integer",
+              "description": "Steam AppID for SteamCMD updates (if applicable)"
+            },
+            "notes": {
+              "type": "string",
+              "maxLength": 300,
+              "description": "Human-readable notes about setup requirements"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -6,13 +6,19 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
+from control_engine import ControlEngine, ControlEngineError
+
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 DOWNLOADS = ROOT / "downloads"
-MINECRAFT_DIR = Path("/mnt/d/Hermes/Projects/minecraft-server")
-PALWORLD_DIR = Path("/mnt/d/Hermes/Projects/palworld-server-local")
+PROJECTS_ROOT = Path(os.environ.get("HERMES_PROJECTS_ROOT", str(ROOT.parent))).expanduser().resolve()
+PROFILES_DIR = Path(os.environ.get("GAME_HOST_PROFILES_DIR", str(ROOT / "game_profiles"))).expanduser().resolve()
+ADAPTER_CONFIG_PATH = Path(os.environ.get("GAME_HOST_ADAPTER_CONFIG", str(ROOT / "game_adapters.json"))).expanduser().resolve()
+AUDIT_PATH = Path(os.environ.get("GAME_HOST_AUDIT_PATH", str(ROOT / "data" / "control-audit.jsonl"))).expanduser().resolve()
+MINECRAFT_DIR = PROJECTS_ROOT / "minecraft-server"
+PALWORLD_DIR = PROJECTS_ROOT / "palworld-server-local"
 DEFAULT_PORT = int(os.environ.get("DASHBOARD_PORT", "5057"))
-DEFAULT_HOST = os.environ.get("DASHBOARD_HOST", "0.0.0.0")
+DEFAULT_HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
 CACHE: dict[str, tuple[float, Any]] = {}
 
 def iso(epoch: float | None = None) -> str:
@@ -67,9 +73,30 @@ def minecraft_ping(host="127.0.0.1", port=25565) -> dict[str, Any]:
             data += s.recv(length-len(data))
     return json.loads(data.decode())
 
+def find_process_pid(needle: str, *, proc_root: Path = Path("/proc")) -> int | None:
+    if not needle:
+        return None
+    try:
+        candidates = sorted(
+            (entry for entry in proc_root.iterdir() if entry.name.isdigit()),
+            key=lambda entry: int(entry.name),
+        )
+    except OSError:
+        return None
+    for entry in candidates:
+        try:
+            command = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode(
+                "utf-8", errors="replace"
+            )
+        except OSError:
+            continue
+        if needle in command:
+            return int(entry.name)
+    return None
+
+
 def find_minecraft_pid() -> int | None:
-    out = run(["bash", "-lc", "pgrep -f 'server.jar nogui' | head -n 1"], timeout=3)["stdout"].strip()
-    return int(out) if out.isdigit() else None
+    return find_process_pid("server.jar nogui")
 
 def proc_stats(pid: int | None) -> dict[str, Any]:
     if not pid: return {"running": False}
@@ -132,20 +159,211 @@ def powershell_json(script: str, timeout=8) -> tuple[dict[str, Any], dict[str, A
 
 def palworld_status() -> dict[str, Any]:
     def collect():
-        ps = "\n".join([
-            "$ErrorActionPreference = 'SilentlyContinue'",
-            "$procs = Get-Process | Where-Object { $_.ProcessName -like '*PalServer*' } | ForEach-Object { [pscustomobject]@{ Id=$_.Id; Name=$_.ProcessName; CPU=$_.CPU; WorkingSetMB=[math]::Round($_.WorkingSet64/1MB,1); StartTime=$_.StartTime.ToString('s') } }",
-            "$udp = Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8211,27015 } | ForEach-Object { [pscustomobject]@{ LocalAddress=$_.LocalAddress; LocalPort=$_.LocalPort; OwningProcess=$_.OwningProcess } }",
-            "[pscustomobject]@{ Processes=@($procs); Udp=@($udp) } | ConvertTo-Json -Depth 5 -Compress"
-        ])
-        data, meta = powershell_json(ps)
-        procs = data.get("Processes") or []; udp = data.get("Udp") or []
-        if isinstance(procs, dict): procs = [procs]
-        if isinstance(udp, dict): udp = [udp]
-        return {"name":"Palworld", "displayName":"Palworld", "online": len(procs)>0,
-                "connect":{"public":"108.91.89.116:8211","lan":"10.0.0.2:8211"}, "processes": procs, "listeners": udp,
-                "backup": newest([PALWORLD_DIR/"backups"/"*.zip"]), "collector": meta}
+        pid = find_process_pid("PalServer-Linux-Shipping")
+        process = proc_stats(pid)
+        sockets = run(["ss", "-lunp"], timeout=3)
+        socket_text = sockets.get("stdout", "")
+        listeners = [
+            {"port": port, "protocol": "udp", "listening": f":{port} " in socket_text}
+            for port in (8211, 27015)
+        ]
+        ip = public_ip()
+        return {
+            "name": "Palworld",
+            "displayName": "Palworld",
+            "online": bool(process.get("running")),
+            "connect": {
+                "public": f"{ip or 'unavailable'}:8211",
+                "lan": "10.0.0.2:8211",
+                "local": "127.0.0.1:8211",
+            },
+            "process": process,
+            "listeners": listeners,
+            "backup": newest([PALWORLD_DIR / "backups" / "*.zip"]),
+            "collector": {
+                "ok": True,
+                "source": "linux-procfs",
+                "socketProbeOk": bool(sockets.get("ok")),
+            },
+        }
     return cached("palworld", 10, collect)
+
+# ---------------------------------------------------------------------------
+# Generic game server status — reads adapter config to detect + report
+# ---------------------------------------------------------------------------
+
+def _load_adapter_config() -> dict[str, Any]:
+    """Load the game adapter config for status collectors."""
+    if not ADAPTER_CONFIG_PATH.is_file():
+        return {}
+    try:
+        data = json.loads(ADAPTER_CONFIG_PATH.read_text(encoding="utf-8"))
+        return data.get("games", {})
+    except Exception:
+        return {}
+
+def _adapter_config() -> dict[str, Any]:
+    """Cached adapter config. Reloads on cache miss only."""
+    if "_adapters" not in CACHE or time.time() - CACHE["_adapters"][0] > 120:
+        CACHE["_adapters"] = (time.time(), _load_adapter_config())
+    return CACHE["_adapters"][1]
+
+def generic_server_status(game_id: str) -> dict[str, Any]:
+    """Collect server status for any game in the adapter config.
+
+    Uses the adapter's statusCollector field to decide how to probe:
+    - minecraft_ping: MC server list protocol
+    - steam_query: A2S_INFO UDP query
+    - process_only: /proc check only
+    """
+    def collect():
+        adapters = _adapter_config()
+        adapter = adapters.get(game_id, {})
+        if not adapter:
+            return {"name": game_id, "online": False, "error": "no adapter config"}
+
+        name = adapter.get("displayName", game_id)
+        # Try to read display name from profile
+        try:
+            profile_path = PROFILES_DIR / f"{game_id}.json"
+            if profile_path.is_file():
+                profile = json.loads(profile_path.read_text(encoding="utf-8"))
+                name = profile.get("name", name)
+        except Exception:
+            pass
+        proc_search = adapter.get("processSearch", "")
+        default_port = adapter.get("defaultPort", 0)
+        protocol = adapter.get("portProtocol", "udp")
+        collector = adapter.get("statusCollector", "process_only")
+
+        pid = find_process_pid(proc_search) if proc_search else None
+        process = proc_stats(pid)
+        online = bool(process.get("running"))
+        ip = public_ip()
+
+        listeners = []
+        if default_port:
+            sockets = run(["ss", "-lunp"], timeout=3)
+            socket_text = sockets.get("stdout", "")
+            listeners = [
+                {"port": default_port, "protocol": protocol, "listening": f":{default_port} " in socket_text}
+            ]
+
+        result: dict[str, Any] = {
+            "name": name,
+            "displayName": name,
+            "online": online,
+            "connect": {
+                "public": f"{ip or 'unavailable'}:{default_port}",
+                "lan": f"10.0.0.2:{default_port}",
+                "local": f"127.0.0.1:{default_port}",
+            },
+            "process": process,
+            "listeners": listeners,
+            "collector": {
+                "ok": True,
+                "source": collector,
+                "processSearch": proc_search,
+            },
+        }
+
+        # Minecraft-specific ping
+        if collector == "minecraft_ping" and online and default_port:
+            try:
+                ping = minecraft_ping(port=default_port)
+                players = ping.get("players") or {}
+                sample = players.get("sample") or []
+                result["version"] = (ping.get("version") or {}).get("name")
+                result["players"] = {
+                    "online": players.get("online", 0),
+                    "max": players.get("max", 0),
+                    "names": [p.get("name") for p in sample if p.get("name")],
+                }
+            except Exception as exc:
+                result["pingError"] = str(exc)
+
+        # Steam A2S_INFO query
+        if collector == "steam_query" and online and default_port:
+            try:
+                steam_info = steam_a2s_info("127.0.0.1", default_port)
+                if steam_info:
+                    result["serverName"] = steam_info.get("name", "")
+                    result["map"] = steam_info.get("map", "")
+                    result["players"] = {
+                        "online": steam_info.get("players", 0),
+                        "max": steam_info.get("max_players", 0),
+                    }
+            except Exception as exc:
+                result["steamQueryError"] = str(exc)
+
+        return result
+
+    return cached(f"generic_{game_id}", 10, collect)
+
+
+def steam_a2s_info(host: str = "127.0.0.1", port: int = 27015, timeout: float = 3.0) -> dict[str, Any] | None:
+    """Send a Steam A2S_INFO query and return parsed server info.
+
+    Uses the standard Source engine query protocol:
+    - 4 bytes: 0xFF 0xFF 0xFF 0xFF (header)
+    - 1 byte: 'T' (A2S_INFO request)
+    - payload: "Source Engine Query\0"
+    Returns None if the server doesn't respond or isn't a Source engine server.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        # A2S_INFO challenge-free request
+        request = b'\xff\xff\xff\xffTSource Engine Query\x00'
+        sock.sendto(request, (host, port))
+        data, _ = sock.recvfrom(1400)
+        sock.close()
+
+        if len(data) < 6 or data[:4] != b'\xff\xff\xff\xff':
+            return None
+
+        # Parse response
+        offset = 5  # skip 0xFF x4 + type 'I'
+        result: dict[str, Any] = {}
+
+        # Protocol version
+        result["protocol"] = data[offset]
+        offset += 1
+
+        # Server name (null-terminated)
+        end = data.find(b'\x00', offset)
+        result["name"] = data[offset:end].decode("utf-8", errors="replace")
+        offset = end + 1
+
+        # Map (null-terminated)
+        end = data.find(b'\x00', offset)
+        result["map"] = data[offset:end].decode("utf-8", errors="replace")
+        offset = end + 1
+
+        # Folder (null-terminated)
+        end = data.find(b'\x00', offset)
+        result["folder"] = data[offset:end].decode("utf-8", errors="replace")
+        offset = end + 1
+
+        # Game (null-terminated)
+        end = data.find(b'\x00', offset)
+        result["game"] = data[offset:end].decode("utf-8", errors="replace")
+        offset = end + 1
+
+        # ID (2 bytes, little endian — may not exist in newer responses)
+        if offset + 1 < len(data):
+            result["id"] = data[offset] | (data[offset + 1] << 8)
+        offset += 2
+
+        # Players and max players (1 byte each)
+        if offset < len(data):
+            result["players"] = data[offset]
+        if offset + 1 < len(data):
+            result["max_players"] = data[offset + 1]
+
+        return result
+    except Exception:
+        return None
 
 def windows_status() -> dict[str, Any]:
     ps = "\n".join([
@@ -187,31 +405,143 @@ def host_status() -> dict[str, Any]:
 
 def dashboard_data() -> dict[str, Any]:
     started = time.time()
-    data = {"generatedAt": iso(), "readOnly": True, "refreshSeconds": 5, "services":{"minecraft": minecraft_status(), "palworld": palworld_status()}, "host": host_status()}
+    adapters = _adapter_config()
+    services: dict[str, Any] = {}
+    for game_id, adapter in adapters.items():
+        collector = adapter.get("statusCollector", "process_only")
+        if collector == "minecraft_ping":
+            services[game_id] = minecraft_status()
+        else:
+            services[game_id] = generic_server_status(game_id)
+    data = {"generatedAt": iso(), "readOnly": True, "refreshSeconds": 5, "services": services, "host": host_status()}
     data["collectorMs"] = round((time.time()-started)*1000)
     return data
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "HermesGameHostConsole/0.1"
-    def log_message(self, fmt: str, *args: Any) -> None: print(f"[{iso()}] {self.address_string()} {fmt % args}", flush=True)
+    server_version = "HermesGameHostConsole/0.2"
+
+    def log_message(self, format: str, *args: Any) -> None:
+        print(f"[{iso()}] {self.address_string()} {format % args}", flush=True)
+
+    @property
+    def control_engine(self) -> ControlEngine:
+        return self.server.control_engine  # type: ignore[attr-defined]
+
     def send_json(self, code: int, obj: Any) -> None:
-        raw = json.dumps(obj, indent=2).encode(); self.send_response(code); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        raw = json.dumps(obj, indent=2).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def send_file(self, path: Path, ctype: str) -> None:
-        raw = path.read_bytes(); self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        raw = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def read_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > 65_536:
+            raise ControlEngineError("invalid request body size")
+        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ControlEngineError("request body must be a JSON object")
+        return value
+
     def do_GET(self) -> None:
         try:
-            if self.path in ("/", "/index.html"): self.send_file(STATIC/"index.html", "text/html; charset=utf-8")
-            elif self.path == "/health": self.send_json(200, {"ok": True, "service":"hermes-game-host-console", "readOnly": True, "generatedAt": iso()})
-            elif self.path == "/api/status": self.send_json(200, dashboard_data())
-            elif self.path == "/project-zim-architecture-inventory.zip": self.send_file(DOWNLOADS/"project-zim-architecture-inventory.zip", "application/zip")
-            elif self.path == "/static/app.css": self.send_file(STATIC/"app.css", "text/css; charset=utf-8")
-            elif self.path == "/static/app.js": self.send_file(STATIC/"app.js", "application/javascript; charset=utf-8")
-            else: self.send_json(404, {"error":"not found"})
-        except Exception as e: self.send_json(500, {"error": str(e), "generatedAt": iso()})
+            if self.path in ("/", "/index.html"):
+                self.send_file(STATIC / "index.html", "text/html; charset=utf-8")
+            elif self.path == "/health":
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "service": "hermes-game-host-console",
+                        "controlMode": "preview-confirm-audit",
+                        "generatedAt": iso(),
+                    },
+                )
+            elif self.path == "/api/status":
+                self.send_json(200, dashboard_data())
+            elif self.path == "/api/controls":
+                self.send_json(200, self.control_engine.catalog())
+            elif self.path == "/project-zim-architecture-inventory.zip":
+                self.send_file(DOWNLOADS / "project-zim-architecture-inventory.zip", "application/zip")
+            elif self.path == "/static/app.css":
+                self.send_file(STATIC / "app.css", "text/css; charset=utf-8")
+            elif self.path == "/static/app.js":
+                self.send_file(STATIC / "app.js", "application/javascript; charset=utf-8")
+            else:
+                self.send_json(404, {"error": "not found"})
+        except ControlEngineError as exc:
+            self.send_json(400, {"error": str(exc), "generatedAt": iso()})
+        except Exception as exc:
+            self.send_json(500, {"error": str(exc), "generatedAt": iso()})
 
-def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--host", default=DEFAULT_HOST); ap.add_argument("--port", type=int, default=DEFAULT_PORT); args = ap.parse_args()
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    def do_POST(self) -> None:
+        try:
+            body = self.read_json()
+            if self.path == "/api/control/plan":
+                result = self.control_engine.plan(
+                    game_id=str(body.get("gameId", "")),
+                    control_id=str(body.get("controlId", "")),
+                    value=body.get("value"),
+                    actor=str(body.get("actor") or "dashboard"),
+                )
+                self.send_json(200, result)
+            elif self.path == "/api/control/apply":
+                digest = body.get("planDigest")
+                result = self.control_engine.apply(
+                    plan_id=str(body.get("planId", "")),
+                    actor=str(body.get("actor") or "dashboard"),
+                    confirmed=body.get("confirmed") is True,
+                    plan_digest=None if digest is None else str(digest),
+                )
+                self.send_json(200, result)
+            else:
+                self.send_json(404, {"error": "not found"})
+        except (ControlEngineError, json.JSONDecodeError) as exc:
+            self.send_json(400, {"error": str(exc), "generatedAt": iso()})
+        except Exception as exc:
+            self.send_json(500, {"error": str(exc), "generatedAt": iso()})
+
+
+def create_server(
+    *,
+    host: str,
+    port: int,
+    projects_root: Path = PROJECTS_ROOT,
+    profiles_dir: Path = PROFILES_DIR,
+    audit_path: Path = AUDIT_PATH,
+    adapter_config_path: Path | None = None,
+) -> ThreadingHTTPServer:
+    cfg_path = adapter_config_path or ADAPTER_CONFIG_PATH
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.control_engine = ControlEngine(  # type: ignore[attr-defined]
+        projects_root=projects_root,
+        profiles_dir=profiles_dir,
+        audit_path=audit_path,
+        adapter_config_path=cfg_path,
+    )
+    return server
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    args = parser.parse_args()
+    httpd = create_server(host=args.host, port=args.port)
     print(f"Game host dashboard listening on http://{args.host}:{args.port}", flush=True)
     httpd.serve_forever()
-if __name__ == "__main__": main()
+
+
+if __name__ == "__main__":
+    main()

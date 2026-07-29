@@ -1,17 +1,109 @@
 # Hermes Game Host Console Status
 
-- Status: Running — MVP read-only dashboard using the Hermes teal dashboard style.
-- Latest verification: `2026-06-28 14:00 EDT` — local health passed after restart; HTML title/header verified as `Hermes Game Host Console`; CSS now mirrors the Hermes Usage Dashboard dark navy/teal/purple palette, compact cards/pills, button hover treatment, and gradient bars; browser visual smoke passed with live Minecraft telemetry.
+- Status: **Working MVP — now multi-game with data-driven adapters**
+- Latest verification: `2026-07-28 17:49 EDT`
 - Product/add-on name: `Hermes Game Host Console`
-- Port: `5057`
-- WSL URL: `http://127.0.0.1:5057`
-- LAN URL: `http://10.0.0.2:5057`
-- Safety: read-only; no Minecraft/Palworld restarts; no control buttons.
-- Styling: aligned to Hermes Usage Dashboard palette (`#0b1020`, `#121a32`, `#a78bfa`, `#2dd4bf`, `#25304a`) and layout language.
-- Data sources:
-  - Minecraft server-list ping on `127.0.0.1:25565`
-  - Minecraft process and redacted log pulse from WSL
-  - Palworld Windows process/listener checks
-  - WSL memory/load/disk
-  - Windows memory/disk via PowerShell
-  - Backup folder freshness
+- Version: backend `HermesGameHostConsole/0.2`, plugin `0.2.0`
+- Port: `5057` (loopback only by default)
+- Local URL: `http://127.0.0.1:5057`
+- Hermes Desktop route: `/game-host`
+- Authenticated bridge: `/api/plugins/game-host-console/*` on the Hermes dashboard (`:9119`)
+
+## What works
+
+- Live local console with **9 game profiles** (Minecraft, Palworld, Valheim, CS2, Terraria, Don't Starve Together, Satisfactory, Enshrouded, Sons of the Forest)
+- Closed control kinds: button, switch, slider, select, text, number, readonly
+- Declarative profiles in `game_profiles/*.json` (no executable code in profiles)
+- **Data-driven adapter mapping** in `game_adapters.json` — adding a new game no longer requires edits to `control_engine.py`
+- Plan → confirm → apply flow with one-time plan IDs, actor binding, plan digest, audit log, property rollback copies
+- Hermes Desktop disk plugin installed at `~/.hermes/desktop-plugins/game-host-console/`
+- Hermes backend bridge installed at `~/.hermes/plugins/game-host-console/`
+- Plugin listed by dashboard discovery with `has_api: true`
+
+## New in this update (July 2026)
+
+### Data-driven adapter architecture
+The old hardcoded `_commands_for()` dict is gone. `game_adapters.json` now maps:
+
+| Field | Purpose |
+|---|---|
+| `projectDir` | Subdirectory under PROJECTS_ROOT with start.sh / stop.sh |
+| `commands` | Action → [[script, timeout], ...] mapping |
+| `propertyTypes` | Mutable server.properties key → type mapping (if any) |
+| `statusCollector` | `minecraft_ping`, `steam_query`, or `process_only` |
+| `processSearch` | Substring for /proc/cmdline detection |
+| `defaultPort` | Game port for status display |
+
+### New game profiles added
+- **Valheim** — Steam AppID 896660, anonymous SteamCMD, UDP 2456
+- **Counter-Strike 2** — Steam AppID 730, needs GSLT token, UDP 27015
+- **Don't Starve Together** — Steam AppID 343050, anonymous SteamCMD, UDP 10999
+- **Satisfactory** — Steam AppID 1690800, anonymous SteamCMD, UDP 7777
+- **Enshrouded** — Steam AppID 2278520, anonymous SteamCMD, UDP 15636
+- **Sons of the Forest** — Steam AppID 2465200, anonymous SteamCMD, UDP 8766
+- **Terraria** — Standalone binary, TCP 7777
+
+### Generic status collectors
+- `steam_a2s_info()` — Source engine A2S_INFO UDP query for server name, map, player count
+- `generic_server_status()` — Reads adapter config, auto-detects process, reports port listeners
+- `dashboard_data()` now dynamically iterates all adapters instead of hardcoding Minecraft+Palworld
+
+### Documentation
+- `docs/ADDING_A_GAME.md` — Complete 3-step guide for adding new games
+- `game_profiles/_template.json` — Copy-paste starter profile
+- `schemas/game-adapter-config.schema.json` — Formal schema for the adapter config
+
+## Safety model (unchanged)
+
+- Profiles describe UI semantics only
+- Mutations require `confirmed=true`
+- Apply actor must match plan actor
+- Optional/required `planDigest` must match when supplied
+- Property writes use `server.properties` pattern with pre-write backup
+- Local service binds `127.0.0.1` by default; Hermes proxy is auth-gated
+- Adapter config maps to approved scripts only — no arbitrary shell from profiles
+- Do **not** expose port `5057` on the LAN while mutation endpoints are enabled
+
+## Active game servers on this host
+
+| Game | Status | Scripts exist? |
+|---|---|---|
+| Minecraft | Running | Yes (minecraft-server/) |
+| Palworld | Running | Yes (palworld-server-local/) |
+| Valheim | Not installed | Needs start.sh/stop.sh + SteamCMD download |
+| CS2 | Not installed | Needs GSLT token + start.sh/stop.sh |
+| Terraria | Not installed | Needs binary + world file |
+| DST | Not installed | Needs cluster token + start.sh/stop.sh |
+| Satisfactory | Not installed | Needs SteamCMD download + start.sh/stop.sh |
+| Enshrouded | Not installed | Needs SteamCMD download + start.sh/stop.sh |
+| SotF | Not installed | Needs SteamCMD download + start.sh/stop.sh |
+
+## How to add a game server for real
+
+1. **Create the server directory**: `~/Projects/<game>-server/`
+2. **Write start.sh and stop.sh** — see `docs/ADDING_A_GAME.md` for patterns
+3. **Download the server files** — via SteamCMD or direct download
+4. **The profile + adapter are already done** — the new game appears in the console immediately
+
+## Test verification (`2026-07-28`)
+
+- `python3 -m unittest discover -s tests -v` → **10 tests OK** (1 skipped, FastAPI venv)
+- `node tests/ui.test.js` → passed
+- `node tests/desktop_plugin.test.js` → passed
+- All 9 profiles validated against schema ✓
+- All 9 profiles have matching adapters ✓
+
+## Reverse / uninstall
+
+```bash
+cd "/run/media/zim/a drive/Hermes/Projects/game-host-dashboard"
+./uninstall-hermes-plugin.sh
+./stop.sh
+```
+
+## Next useful upgrades (optional)
+
+- SteamCMD helper function in app.py for auto-updating servers
+- Auto-create start.sh/stop.sh stubs for new profiles
+- RCON-backed readouts for games that support it
+- Historical metrics in SQLite

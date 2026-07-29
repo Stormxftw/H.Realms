@@ -1,0 +1,14 @@
+{
+  "name": "game-host-console",
+  "label": "Game Host Console Bridge",
+  "description": "Authenticated Hermes Desktop bridge for typed game-server controls",
+  "icon": "Server",
+  "version": "0.2.0",
+  "tab": {
+    "path": "/game-host-console-bridge",
+    "position": "end",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

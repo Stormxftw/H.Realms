@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "1.0",
+  "id": "minecraft",
+  "name": "Minecraft Java",
+  "description": "Fabric server controls. Every mutation is previewed, confirmed, audited, and reversible where possible.",
+  "icon": "Box",
+  "controls": [
+    {
+      "id": "refresh",
+      "kind": "button",
+      "label": "Refresh status",
+      "group": "Operations",
+      "risk": "read-only",
+      "variant": "outline",
+      "binding": { "action": "ui.refresh" }
+    },
+    {
+      "id": "start",
+      "kind": "button",
+      "label": "Start server",
+      "group": "Operations",
+      "risk": "service",
+      "enabledWhen": "offline",
+      "binding": { "action": "service.start" }
+    },
+    {
+      "id": "stop",
+      "kind": "button",
+      "label": "Stop server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "help": "Gracefully saves the world and stops the server.",
+      "binding": { "action": "service.stop" }
+    },
+    {
+      "id": "restart",
+      "kind": "button",
+      "label": "Restart server",
+      "group": "Operations",
+      "risk": "disruptive",
+      "enabledWhen": "online",
+      "variant": "destructive",
+      "binding": { "action": "service.restart" }
+    },
+    {
+      "id": "backup-now",
+      "kind": "button",
+      "label": "Create backup",
+      "group": "Operations",
+      "risk": "safe-mutation",
+      "variant": "secondary",
+      "help": "Flushes the world, creates a compressed backup, and keeps the configured retention count.",
+      "binding": { "action": "backup.create" }
+    },
+    {
+      "id": "difficulty",
+      "kind": "select",
+      "label": "Difficulty",
+      "group": "Gameplay",
+      "risk": "configuration",
+      "restartRequired": true,
+      "options": [
+        { "value": "peaceful", "label": "Peaceful" },
+        { "value": "easy", "label": "Easy" },
+        { "value": "normal", "label": "Normal" },
+        { "value": "hard", "label": "Hard" }
+      ],
+      "binding": { "action": "property.set", "key": "difficulty" }
+    },
+    {
+      "id": "max-players",
+      "kind": "slider",
+      "label": "Maximum players",
+      "group": "Capacity",
+      "risk": "configuration",
+      "restartRequired": true,
+      "min": 1,
+      "max": 50,
+      "step": 1,
+      "unit": "players",
+      "binding": { "action": "property.set", "key": "max-players" }
+    },
+    {
+      "id": "view-distance",
+      "kind": "slider",
+      "label": "View distance",
+      "group": "Capacity",
+      "risk": "configuration",
+      "restartRequired": true,
+      "min": 2,
+      "max": 24,
+      "step": 1,
+      "unit": "chunks",
+      "help": "Higher values increase CPU, memory, and network load.",
+      "binding": { "action": "property.set", "key": "view-distance" }
+    },
+    {
+      "id": "whitelist",
+      "kind": "switch",
+      "label": "Require whitelist",
+      "group": "Access",
+      "risk": "configuration",
+      "restartRequired": true,
+      "help": "Keep enabled unless you deliberately want a public server.",
+      "binding": { "action": "property.set", "key": "white-list" }
+    },
+    {
+      "id": "motd",
+      "kind": "text",
+      "label": "Server message",
+      "group": "Identity",
+      "risk": "configuration",
+      "restartRequired": true,
+      "maxLength": 120,
+      "binding": { "action": "property.set", "key": "motd" }
+    }
+  ]
+}

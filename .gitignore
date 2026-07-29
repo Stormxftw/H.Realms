@@ -5,3 +5,5 @@ logs/*.log
 *.pid
 *.in
 downloads/*.zip
+.install-backups/
+.promptloop/runs/

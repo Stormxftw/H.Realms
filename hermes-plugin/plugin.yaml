@@ -1,0 +1,5 @@
+name: game-host-console
+version: 0.2.0
+description: "Authenticated Hermes Desktop control surface for dedicated game servers"
+author: "Joseph Shaw"
+homepage: "local"
