@@ -9,15 +9,35 @@ import stat
 import subprocess
 import threading
 import time
+from concurrent.futures import Executor, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from operations import OperationStore
 from registry import ACTION_POLICIES, RISK_LEVELS, GameRegistry, RegistryError
+from restart_state import RestartStateStore, pending_restart_presentation
 
 
 class ControlEngineError(ValueError):
     """Raised when a game control profile or request is invalid."""
+
+
+class OperationConflictError(ControlEngineError):
+    """Raised when a game already has an active mutation."""
+
+    def __init__(self, active_operation_id: str, operation: dict[str, Any] | None = None):
+        self.active_operation_id = active_operation_id
+        self.operation = operation
+        super().__init__(f"another mutation is active for this game: {active_operation_id}")
+
+
+class OperationRejectedError(ControlEngineError):
+    """Raised when an identifiable apply request is rejected durably."""
+
+    def __init__(self, message: str, operation: dict[str, Any]):
+        self.operation = operation
+        super().__init__(message)
 
 
 class ControlEngine:
@@ -65,6 +85,18 @@ class ControlEngine:
         audit_path: Path,
         adapter_config_path: Path | None = None,
         command_runner: Callable[..., dict[str, Any]] | None = None,
+        operation_store: OperationStore | None = None,
+        restart_state_store: RestartStateStore | None = None,
+        status_provider: Callable[[str], dict[str, Any]] | None = None,
+        clock: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        sleeper: Callable[[float], None] | None = None,
+        executor: Executor | None = None,
+        executor_workers: int = 4,
+        plan_ttl_seconds: int = 300,
+        max_pending_plans: int = 256,
+        postcondition_timeout: float = 30.0,
+        poll_interval: float = 1.0,
     ):
         self.projects_root = Path(projects_root)
         self.profiles_dir = Path(profiles_dir)
@@ -83,11 +115,67 @@ class ControlEngine:
             raise ControlEngineError(str(exc)) from exc
         self._plans: dict[str, dict[str, Any]] = {}
         self._plans_lock = threading.Lock()
+        self._mutation_lock = threading.Lock()
         self._game_locks: dict[str, threading.Lock] = {}
+        self._active_by_game: dict[str, str] = {}
+        self._audit_lock = threading.Lock()
         self._command_runner = command_runner or self._default_command_runner
+        self._operation_store = operation_store or OperationStore(
+            db_path=self.audit_path.with_name("operations.db"),
+            private_path_prefixes=(Path.home(), self.projects_root),
+        )
+        self._restart_state_store = restart_state_store or RestartStateStore(
+            self.audit_path.with_name("restart-state.json")
+        )
+        self._status_provider = status_provider or self._unknown_status
+        self._status_checks_enabled = status_provider is not None
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._monotonic = monotonic or time.monotonic
+        self._sleeper = sleeper or time.sleep
+        if executor_workers < 1 or executor_workers > 32:
+            raise ValueError("executor_workers must be from 1 through 32")
+        if plan_ttl_seconds < 1:
+            raise ValueError("plan_ttl_seconds must be positive")
+        if max_pending_plans < 1:
+            raise ValueError("max_pending_plans must be positive")
+        if postcondition_timeout <= 0 or poll_interval <= 0:
+            raise ValueError("postcondition timeout and interval must be positive")
+        self._plan_ttl_seconds = plan_ttl_seconds
+        self._max_pending_plans = max_pending_plans
+        self._postcondition_timeout = float(postcondition_timeout)
+        self._poll_interval = float(poll_interval)
+        self._executor = executor or ThreadPoolExecutor(
+            max_workers=executor_workers,
+            thread_name_prefix="game-host-operation",
+        )
+        self._owns_executor = executor is None
         for game_id in self._registry.game_ids:
             for control in self._registry.profile(game_id).get("controls", []):
                 self._validate_control(game_id, control)
+
+    @staticmethod
+    def _unknown_status(game_id: str) -> dict[str, Any]:
+        return {
+            "id": game_id,
+            "state": "unknown",
+            "online": False,
+            "process": {
+                "ok": False,
+                "running": None,
+                "pid": None,
+                "error": "no status provider configured",
+            },
+        }
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def close(self) -> None:
+        if self._owns_executor:
+            self._executor.shutdown(wait=True)
 
 
     def _adapter_for(self, game_id: str) -> dict[str, Any]:
@@ -308,6 +396,9 @@ class ControlEngine:
         self._ensure_action_ready(game_id, action)
         _backend_risk, requires_confirmation = ACTION_POLICIES[action]
         plan_id = secrets.token_urlsafe(24)
+        now = self._now().timestamp()
+        planned_status = self._status_provider(game_id)
+        status_fingerprint = self._status_fingerprint(planned_status)
         plan = {
             "ok": True,
             "planId": plan_id,
@@ -322,15 +413,54 @@ class ControlEngine:
             "restartRequired": bool(control.get("restartRequired", False)),
             "requiresConfirmation": requires_confirmation,
             "actor": actor or "unknown",
-            "expiresAt": time.time() + 300,
+            "expiresAt": now + self._plan_ttl_seconds,
             "profileDigest": view["profileDigest"],
+            "statusFingerprint": status_fingerprint,
             "binding": dict(control["binding"]),
+            "createdAt": now,
+            "plannedStatus": planned_status,
         }
         digest_payload = json.dumps(plan, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
         plan["planDigest"] = hashlib.sha256(digest_payload).hexdigest()
         with self._plans_lock:
+            self._purge_plans_locked(now)
+            while len(self._plans) >= self._max_pending_plans:
+                # dict iteration is insertion ordered, so equal timestamps evict
+                # the genuinely oldest preview rather than a random token order.
+                oldest_id = min(
+                    self._plans,
+                    key=lambda item: float(self._plans[item].get("createdAt", 0)),
+                )
+                self._plans.pop(oldest_id, None)
             self._plans[plan_id] = plan
-        return {key: value for key, value in plan.items() if key != "binding"}
+        return {
+            key: value
+            for key, value in plan.items()
+            if key not in {"binding", "createdAt", "plannedStatus"}
+        }
+
+    def _purge_plans_locked(self, now: float | None = None) -> None:
+        current = self._now().timestamp() if now is None else now
+        for plan_id, plan in list(self._plans.items()):
+            if current > float(plan["expiresAt"]):
+                self._plans.pop(plan_id, None)
+
+    @staticmethod
+    def _status_fingerprint(status: dict[str, Any]) -> str:
+        process = status.get("process") if isinstance(status, dict) else None
+        process = process if isinstance(process, dict) else {}
+        stable = {
+            "state": status.get("state") if isinstance(status, dict) else None,
+            "process": {
+                "ok": process.get("ok"),
+                "running": process.get("running"),
+                "pid": process.get("pid"),
+                "error": process.get("error"),
+                "detector": process.get("detector"),
+            },
+        }
+        payload = json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _ensure_action_ready(self, game_id: str, action: str) -> None:
         if action == "ui.refresh":
@@ -364,6 +494,91 @@ class ControlEngine:
         actor: str,
         confirmed: bool,
         plan_digest: str | None = None,
+        source: str = "unknown",
+    ) -> dict[str, Any]:
+        plan = self._consume_plan(
+            plan_id=plan_id,
+            actor=actor,
+            confirmed=confirmed,
+            plan_digest=plan_digest,
+        )
+        operation = self._queue_operation(plan, source=source)
+        result = self._execute_operation(operation["operationId"], plan)
+        if result["state"] == "failed":
+            raise OperationRejectedError(
+                result.get("output") or f"action failed: {plan['action']}",
+                result,
+            )
+        return result
+
+    def submit_apply(
+        self,
+        *,
+        plan_id: str,
+        actor: str,
+        confirmed: bool,
+        plan_digest: str | None = None,
+        source: str = "unknown",
+    ) -> dict[str, Any]:
+        """Queue one mutation and return its durable operation record promptly."""
+        plan = self._consume_plan(
+            plan_id=plan_id,
+            actor=actor,
+            confirmed=confirmed,
+            plan_digest=plan_digest,
+        )
+        operation = self._queue_operation(plan, source=source)
+        operation_id = operation["operationId"]
+        try:
+            self._executor.submit(self._execute_operation, operation_id, plan)
+        except Exception as exc:
+            self._release_game(str(plan["gameId"]), operation_id)
+            failed = self._operation_store.transition(
+                operation_id,
+                "failed",
+                output=f"background executor rejected operation: {exc}",
+                postcondition={"verified": False, "idempotent": False},
+                recovery_note="no command was launched; retry with a fresh plan",
+            )
+            raise OperationRejectedError(str(exc), failed) from exc
+        return operation
+
+    def operation(self, operation_id: str) -> dict[str, Any] | None:
+        return self._operation_store.get(operation_id)
+
+    def operations(
+        self,
+        *,
+        limit: int = 50,
+        game_id: str | None = None,
+        state: str | list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._operation_store.list(limit=limit, game_id=game_id, state=state)
+
+    def recover_interrupted_operations(self) -> int:
+        return self._operation_store.recover_interrupted(
+            "host process restarted while the operation was running; verify actual game state"
+        )
+
+    def pending_restart(self, game_id: str, status: str = "unknown") -> dict[str, Any]:
+        pending = self._restart_state_store.list_pending(game_id)
+        presentation_state = {
+            "running_ready": "running",
+            "running_degraded": "degraded",
+            "stopped": "stopped",
+        }.get(status, "unknown")
+        return {
+            **pending_restart_presentation(presentation_state, len(pending)),
+            "items": pending,
+        }
+
+    def _consume_plan(
+        self,
+        *,
+        plan_id: str,
+        actor: str,
+        confirmed: bool,
+        plan_digest: str | None,
     ) -> dict[str, Any]:
         with self._plans_lock:
             plan = self._plans.get(plan_id)
@@ -375,42 +590,253 @@ class ControlEngine:
                 raise ControlEngineError("actor does not match the plan actor")
             if plan_digest is not None and plan_digest != plan.get("planDigest"):
                 raise ControlEngineError("digest does not match")
-            if time.time() > float(plan["expiresAt"]):
+            if self._now().timestamp() > float(plan["expiresAt"]):
                 self._plans.pop(plan_id, None)
                 raise ControlEngineError("plan expired")
-            # One-time use: consume before mutation so a second apply cannot race.
             self._plans.pop(plan_id, None)
+            return plan
 
+    def _game_lock_for(self, game_id: str) -> threading.Lock:
+        with self._mutation_lock:
+            return self._game_locks.setdefault(game_id, threading.Lock())
+
+    def _queue_operation(self, plan: dict[str, Any], *, source: str) -> dict[str, Any]:
         game_id = str(plan["gameId"])
-        lock = self._game_locks.setdefault(game_id, threading.Lock())
-        with lock:
-            action = plan["action"]
-            rollback_path: Path | None = None
-            output = ""
-            if action == "property.set":
-                rollback_path = self._apply_property_change(plan)
-            else:
-                command_result = self._apply_script_action(plan)
-                output = str(command_result.get("output", ""))
-                if not command_result.get("ok"):
-                    raise ControlEngineError(output or f"action failed: {action}")
-            record = {
-                "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-                "actor": actor or "unknown",
-                "plannedBy": plan["actor"],
-                "planId": plan_id,
-                "planDigest": plan.get("planDigest"),
-                "gameId": plan["gameId"],
-                "controlId": plan["controlId"],
-                "action": action,
-                "before": plan["currentValue"],
-                "after": plan["proposedValue"],
-                "restartRequired": plan["restartRequired"],
-                "rollbackPath": str(rollback_path) if rollback_path else None,
-                "output": output,
-            }
-            self._append_audit(record)
-            return {"ok": True, **record}
+        with self._mutation_lock:
+            active_operation_id = self._active_by_game.get(game_id)
+            if active_operation_id is not None:
+                raise OperationConflictError(
+                    active_operation_id,
+                    self._operation_store.get(active_operation_id),
+                )
+            operation = self._operation_store.create(
+                game_id=game_id,
+                action=str(plan["action"]),
+                actor=str(plan["actor"]),
+                source=source or "unknown",
+                precondition={
+                    "profileDigest": plan["profileDigest"],
+                    "statusFingerprint": plan["statusFingerprint"],
+                    "status": plan.get("plannedStatus"),
+                },
+            )
+            self._active_by_game[game_id] = operation["operationId"]
+        return operation
+
+    def _release_game(self, game_id: str, operation_id: str) -> None:
+        with self._mutation_lock:
+            if self._active_by_game.get(game_id) == operation_id:
+                self._active_by_game.pop(game_id, None)
+
+    def _revalidate_plan(self, plan: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        current_digest = self.game_view(str(plan["gameId"]))["profileDigest"]
+        if current_digest != plan["profileDigest"]:
+            return {}, "profile changed after preview; create a new plan"
+        status = self._status_provider(str(plan["gameId"]))
+        if self._status_checks_enabled and (
+            self._status_fingerprint(status) != plan["statusFingerprint"]
+        ):
+            return status, "status changed after preview; create a new plan"
+        return status, None
+
+    @staticmethod
+    def _lifecycle_precondition(
+        action: str, status: dict[str, Any]
+    ) -> tuple[bool, bool, str | None]:
+        process = status.get("process") if isinstance(status, dict) else None
+        process = process if isinstance(process, dict) else {}
+        state = status.get("state") if isinstance(status, dict) else None
+        running = process.get("running")
+        if process.get("ok") is not True or type(running) is not bool:
+            return False, False, "unsafe lifecycle precondition: process state is unknown"
+        if state not in {"running_ready", "stopped"}:
+            return False, False, f"unsafe lifecycle precondition: server state is {state or 'unknown'}"
+        if action == "service.start" and running:
+            return True, True, None
+        if action == "service.stop" and not running:
+            return True, True, None
+        if action == "service.restart" and not running:
+            return False, False, "unsafe lifecycle precondition: cannot restart a stopped server"
+        return True, False, None
+
+    def _poll_lifecycle_postcondition(
+        self, game_id: str, action: str
+    ) -> tuple[bool, dict[str, Any]]:
+        if not self._status_checks_enabled:
+            return True, self._status_provider(game_id)
+        expected_running = action != "service.stop"
+        deadline = self._monotonic() + self._postcondition_timeout
+        while True:
+            observed = self._status_provider(game_id)
+            process = observed.get("process") if isinstance(observed, dict) else None
+            process = process if isinstance(process, dict) else {}
+            expected_state = "running_ready" if expected_running else "stopped"
+            if (
+                process.get("ok") is True
+                and process.get("running") is expected_running
+                and observed.get("state") == expected_state
+            ):
+                return True, observed
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return False, observed
+            self._sleeper(min(self._poll_interval, remaining))
+
+    def _result_fields(
+        self,
+        plan: dict[str, Any],
+        *,
+        rollback_path: Path | None,
+    ) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "timestamp": self._now().astimezone().isoformat(timespec="seconds"),
+            "plannedBy": plan["actor"],
+            "planId": plan["planId"],
+            "planDigest": plan.get("planDigest"),
+            "controlId": plan["controlId"],
+            "before": plan["currentValue"],
+            "after": plan["proposedValue"],
+            "restartRequired": plan["restartRequired"],
+            "rollbackPath": str(rollback_path) if rollback_path else None,
+        }
+
+    def _execute_operation(
+        self, operation_id: str, plan: dict[str, Any]
+    ) -> dict[str, Any]:
+        game_id = str(plan["gameId"])
+        action = str(plan["action"])
+        lock = self._game_lock_for(game_id)
+        started = False
+        command_result: dict[str, Any] = {}
+        try:
+            with lock:
+                status, rejection = self._revalidate_plan(plan)
+                idempotent = False
+                if rejection is None and action.startswith("service.") and self._status_checks_enabled:
+                    safe, idempotent, rejection = self._lifecycle_precondition(action, status)
+                    if not safe and rejection is None:
+                        rejection = "unsafe lifecycle precondition"
+                if rejection is not None:
+                    return self._operation_store.transition(
+                        operation_id,
+                        "failed",
+                        output=rejection,
+                        postcondition={
+                            "verified": False,
+                            "idempotent": False,
+                            "observed": status,
+                        },
+                        recovery_note="no command was launched; refresh status and create a new plan",
+                    )
+
+                self._operation_store.transition(operation_id, "running")
+                started = True
+                rollback_path: Path | None = None
+                output = ""
+                if idempotent:
+                    postcondition = {
+                        "verified": True,
+                        "idempotent": True,
+                        "observed": status,
+                    }
+                elif action == "property.set":
+                    rollback_path = self._apply_property_change(plan)
+                    actual = self._read_properties(game_id).get(
+                        str(plan["binding"].get("key", ""))
+                    )
+                    actual = self._coerce_property(
+                        game_id, str(plan["binding"].get("key", "")), actual
+                    )
+                    if actual != plan["proposedValue"]:
+                        raise ControlEngineError("configuration write postcondition was not verified")
+                    postcondition = {
+                        "verified": True,
+                        "idempotent": False,
+                        "configuredValue": actual,
+                    }
+                else:
+                    command_result = self._apply_script_action(plan)
+                    output = str(command_result.get("output", ""))
+                    if not command_result.get("ok"):
+                        raise ControlEngineError(output or f"action failed: {action}")
+                    if action.startswith("service."):
+                        verified, observed = self._poll_lifecycle_postcondition(game_id, action)
+                        postcondition = {
+                            "verified": verified,
+                            "idempotent": False,
+                            "observed": observed,
+                        }
+                        if not verified:
+                            raise ControlEngineError(
+                                "action exited successfully but the lifecycle postcondition was not verified"
+                            )
+                    else:
+                        postcondition = {
+                            "verified": True,
+                            "idempotent": False,
+                            "exitCode": command_result.get("exitCode"),
+                        }
+
+                result_fields = self._result_fields(plan, rollback_path=rollback_path)
+                postcondition["result"] = result_fields
+                transition_time = self._now().isoformat()
+                if action == "property.set" and plan["restartRequired"]:
+                    self._restart_state_store.record_change(
+                        game_id=game_id,
+                        control_id=str(plan["controlId"]),
+                        configured_value=plan["proposedValue"],
+                        effective_value=plan["currentValue"],
+                        originating_operation_id=operation_id,
+                        changed_at=transition_time,
+                    )
+                elif action in {"service.start", "service.restart"}:
+                    self._restart_state_store.mark_verified_transition(
+                        game_id, transition_time, successful=True
+                    )
+
+                audit_record = {
+                    **result_fields,
+                    "actor": plan["actor"],
+                    "gameId": game_id,
+                    "action": action,
+                    "output": output,
+                }
+                self._append_audit(audit_record)
+                completed = self._operation_store.transition(
+                    operation_id,
+                    "succeeded",
+                    output=output,
+                    postcondition=postcondition,
+                )
+                # The durable store intentionally redacts private absolute paths.
+                # Preserve the historical synchronous return contract only for
+                # the in-process caller that just created this rollback file.
+                if rollback_path is not None:
+                    completed["rollbackPath"] = str(rollback_path)
+                return completed
+        except Exception as exc:
+            recovery_note = "mutation may have changed host state; inspect status before retrying"
+            if (
+                action == "service.restart"
+                and int(command_result.get("completedSteps", 0)) > 0
+            ):
+                recovery_note = (
+                    "restart partially completed after stop; the server may be stopped; "
+                    "verify status before starting again"
+                )
+            current = self._operation_store.get(operation_id)
+            if current is not None and current["state"] in {"queued", "running"}:
+                return self._operation_store.transition(
+                    operation_id,
+                    "failed",
+                    output=str(exc),
+                    postcondition={"verified": False, "idempotent": False},
+                    recovery_note=recovery_note,
+                )
+            raise
+        finally:
+            self._release_game(game_id, operation_id)
 
     def _apply_property_change(self, plan: dict[str, Any]) -> Path:
         game_id = str(plan["gameId"])
@@ -467,7 +893,8 @@ class ControlEngine:
     def _apply_script_action(self, plan: dict[str, Any]) -> dict[str, Any]:
         commands = self._commands_for(str(plan["gameId"]), str(plan["action"]))
         outputs: list[str] = []
-        for argv, cwd, timeout in commands:
+        completed_steps = 0
+        for step, (argv, cwd, timeout) in enumerate(commands, start=1):
             script = Path(argv[0])
             try:
                 mode = script.lstat().st_mode
@@ -485,8 +912,16 @@ class ControlEngine:
                     "ok": False,
                     "exitCode": result.get("exitCode"),
                     "output": "\n".join(item for item in outputs if item)[-4000:],
+                    "completedSteps": completed_steps,
+                    "failedStep": step,
                 }
-        return {"ok": True, "exitCode": 0, "output": "\n".join(item for item in outputs if item)[-4000:]}
+            completed_steps += 1
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "output": "\n".join(item for item in outputs if item)[-4000:],
+            "completedSteps": completed_steps,
+        }
 
     def _commands_for(self, game_id: str, action: str) -> list[tuple[list[str], Path, int]]:
         self._adapter_for(game_id)
@@ -521,10 +956,11 @@ class ControlEngine:
 
     def _append_audit(self, record: dict[str, Any]) -> None:
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.audit_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        with self._audit_lock:
+            with self.audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
 
     def _validate_value(self, control: dict[str, Any], value: Any) -> Any:
         kind = control["kind"]
