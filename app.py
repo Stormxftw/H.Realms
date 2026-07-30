@@ -8,13 +8,22 @@ import os
 import re
 import socket
 import time
+import urllib.parse
+from concurrent.futures import Executor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
 import telemetry
-from control_engine import ControlEngine, ControlEngineError
+from control_engine import (
+    ControlEngine,
+    ControlEngineError,
+    OperationConflictError,
+    OperationRejectedError,
+)
+from operations import OperationStore
+from restart_state import RestartStateStore
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -149,6 +158,9 @@ def dashboard_data(
                 "connect": {"local": None, "lan": None, "public": None},
             }
         services[game_id] = {**collected, **readiness}
+        services[game_id]["pendingRestart"] = control_engine.pending_restart(
+            game_id, str(collected.get("state", "unknown"))
+        )
 
     return {
         "generatedAt": iso(),
@@ -217,9 +229,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.reject_untrusted_host():
             return
         try:
-            if self.path in ("/", "/index.html"):
+            parsed = urllib.parse.urlsplit(self.path)
+            path = parsed.path
+            if path in ("/", "/index.html"):
                 self.send_file(STATIC / "index.html", "text/html; charset=utf-8")
-            elif self.path == "/health":
+            elif path == "/health":
                 self.send_json(
                     200,
                     {
@@ -230,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
                         "generatedAt": iso(),
                     },
                 )
-            elif self.path == "/api/status":
+            elif path == "/api/status":
                 self.send_json(
                     200,
                     dashboard_data(
@@ -240,11 +254,44 @@ class Handler(BaseHTTPRequestHandler):
                         lan_address=self.server.lan_address,  # type: ignore[attr-defined]
                     ),
                 )
-            elif self.path == "/api/controls":
+            elif path == "/api/controls":
                 self.send_json(200, catalog_data(self.control_engine))
-            elif self.path == "/static/app.css":
+            elif path == "/api/operations":
+                query = urllib.parse.parse_qs(
+                    parsed.query, keep_blank_values=True, strict_parsing=True
+                )
+                unknown = set(query) - {"limit", "gameId", "state"}
+                if unknown or any(len(values) != 1 for values in query.values()):
+                    raise ControlEngineError("invalid operations query")
+                try:
+                    limit = int(query.get("limit", ["50"])[0])
+                except ValueError as exc:
+                    raise ControlEngineError("operation limit must be an integer") from exc
+                if not 1 <= limit <= 500:
+                    raise ControlEngineError("operation limit must be from 1 through 500")
+                game_id = query.get("gameId", [None])[0]
+                state = query.get("state", [None])[0]
+                self.send_json(
+                    200,
+                    {
+                        "operations": self.control_engine.operations(
+                            limit=limit,
+                            game_id=game_id,
+                            state=state,
+                        ),
+                        "limit": limit,
+                    },
+                )
+            elif re.fullmatch(r"/api/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}", path):
+                operation_id = path.rsplit("/", 1)[-1]
+                operation = self.control_engine.operation(operation_id)
+                if operation is None:
+                    self.send_json(404, {"error": "operation not found"})
+                else:
+                    self.send_json(200, operation)
+            elif path == "/static/app.css":
                 self.send_file(STATIC / "app.css", "text/css; charset=utf-8")
-            elif self.path == "/static/app.js":
+            elif path == "/static/app.js":
                 self.send_file(
                     STATIC / "app.js", "application/javascript; charset=utf-8"
                 )
@@ -280,15 +327,29 @@ class Handler(BaseHTTPRequestHandler):
                 digest = body.get("planDigest")
                 if not isinstance(digest, str) or not digest.strip():
                     raise ControlEngineError("planDigest is required")
-                result = self.control_engine.apply(
+                result = self.control_engine.submit_apply(
                     plan_id=str(body.get("planId", "")),
                     actor=apply_actors[self.path],
                     confirmed=body.get("confirmed") is True,
                     plan_digest=digest,
+                    source=(
+                        "authenticated-bridge"
+                        if self.path.startswith("/api/bridge/")
+                        else "local-http"
+                    ),
                 )
-                self.send_json(200, result)
+                self.send_json(202, result)
             else:
                 self.send_json(404, {"error": "not found"})
+        except OperationConflictError as exc:
+            self.send_json(
+                409,
+                {
+                    "error": str(exc),
+                    "operationId": exc.active_operation_id,
+                    "generatedAt": iso(),
+                },
+            )
         except (ControlEngineError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
@@ -321,6 +382,14 @@ def require_loopback_host(host: str) -> str:
     return host
 
 
+class GameHostHTTPServer(ThreadingHTTPServer):
+    def server_close(self) -> None:
+        control_engine = getattr(self, "control_engine", None)
+        if control_engine is not None:
+            control_engine.close()
+        super().server_close()
+
+
 def create_server(
     *,
     host: str,
@@ -331,16 +400,46 @@ def create_server(
     adapter_config_path: Path | None = None,
     telemetry_collector: Callable[..., dict[str, Any]] = telemetry.collect_game,
     lan_address: str | None = None,
+    operation_store: OperationStore | None = None,
+    restart_state_store: RestartStateStore | None = None,
+    executor: Executor | None = None,
 ) -> ThreadingHTTPServer:
     require_loopback_host(host)
     config_path = Path(adapter_config_path or ADAPTER_CONFIG_PATH)
+    adapters = load_adapters(config_path)
+    engine_holder: dict[str, ControlEngine] = {}
+
+    def status_provider(game_id: str) -> dict[str, Any]:
+        engine = engine_holder["engine"]
+        game = engine.game_view(game_id)
+        readiness = {
+            "readiness": game["readiness"],
+            "projectPresent": bool(game.get("projectPresent")),
+            "blockers": game["blockers"],
+            "capabilities": game["capabilities"],
+            "capabilityReasons": game["capabilityReasons"],
+        }
+        return telemetry_collector(
+            game_id=game_id,
+            name=str(game["name"]),
+            adapter=adapters[game_id],
+            readiness=readiness,
+            lan_address=lan_address if lan_address is not None else discover_lan_address(),
+        )
+
     control_engine = ControlEngine(
         projects_root=projects_root,
         profiles_dir=profiles_dir,
         audit_path=audit_path,
         adapter_config_path=config_path,
+        operation_store=operation_store or OperationStore(),
+        restart_state_store=restart_state_store or RestartStateStore(),
+        status_provider=status_provider,
+        executor=executor,
     )
-    server = ThreadingHTTPServer((host, port), Handler)
+    engine_holder["engine"] = control_engine
+    control_engine.recover_interrupted_operations()
+    server = GameHostHTTPServer((host, port), Handler)
     server.control_engine = control_engine  # type: ignore[attr-defined]
     server.adapter_config_path = config_path  # type: ignore[attr-defined]
     server.telemetry_collector = telemetry_collector  # type: ignore[attr-defined]
