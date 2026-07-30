@@ -9,10 +9,12 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from concurrent.futures import Future
 from pathlib import Path
 from unittest import mock
 
 import app
+from operations import OperationStore
 
 _MC_ADAPTER = {
     "games": {
@@ -110,7 +112,149 @@ def _raw_request(
     return result
 
 
+class ManualExecutor:
+    def __init__(self):
+        self.tasks = []
+
+    def submit(self, function, *args):
+        future = Future()
+        self.tasks.append((future, function, args))
+        return future
+
+    def run_next(self):
+        future, function, args = self.tasks.pop(0)
+        future.set_result(function(*args))
+        return future.result()
+
+
 class ControlApiTests(unittest.TestCase):
+    def test_apply_returns_202_then_bounded_operation_list_and_detail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects, profiles, properties, adapter_path = _write_disposable_control_tree(root)
+            executor = ManualExecutor()
+            store = OperationStore(db_path=root / "state" / "operations.db")
+            server = app.create_server(
+                host="127.0.0.1",
+                port=0,
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+                operation_store=store,
+                executor=executor,
+                telemetry_collector=lambda **kwargs: {
+                    "id": kwargs["game_id"],
+                    "name": kwargs["name"],
+                    "state": "stopped",
+                    "online": False,
+                    "process": {"ok": True, "running": False, "pid": None, "error": None},
+                    "listeners": [],
+                    "query": {"attempted": False, "ok": None, "error": None},
+                    "connect": {"local": None, "lan": None, "public": None},
+                },
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_address[1]
+            host = f"127.0.0.1:{port}"
+            try:
+                plan_status, plan_raw = _raw_request(
+                    port,
+                    "POST",
+                    "/api/control/plan",
+                    host_header=host,
+                    body=json.dumps(
+                        {"gameId": "minecraft", "controlId": "max-players", "value": 18}
+                    ).encode(),
+                )
+                self.assertEqual(200, plan_status)
+                plan = json.loads(plan_raw)
+                apply_status, apply_raw = _raw_request(
+                    port,
+                    "POST",
+                    "/api/control/apply",
+                    host_header=host,
+                    body=json.dumps(
+                        {
+                            "planId": plan["planId"],
+                            "planDigest": plan["planDigest"],
+                            "confirmed": True,
+                        }
+                    ).encode(),
+                )
+                self.assertEqual(202, apply_status)
+                queued = json.loads(apply_raw)
+                self.assertEqual("queued", queued["state"])
+                self.assertEqual("max-players=10\n", properties.read_text())
+
+                list_status, list_raw = _raw_request(
+                    port,
+                    "GET",
+                    "/api/operations?limit=1&gameId=minecraft",
+                    host_header=host,
+                )
+                self.assertEqual(200, list_status)
+                self.assertEqual(
+                    [queued["operationId"]],
+                    [item["operationId"] for item in json.loads(list_raw)["operations"]],
+                )
+                detail_status, detail_raw = _raw_request(
+                    port,
+                    "GET",
+                    f"/api/operations/{queued['operationId']}",
+                    host_header=host,
+                )
+                self.assertEqual(200, detail_status)
+                self.assertEqual("queued", json.loads(detail_raw)["state"])
+                invalid_status, _ = _raw_request(
+                    port, "GET", "/api/operations?limit=501", host_header=host
+                )
+                self.assertEqual(400, invalid_status)
+
+                executor.run_next()
+                detail_status, detail_raw = _raw_request(
+                    port,
+                    "GET",
+                    f"/api/operations/{queued['operationId']}",
+                    host_header=host,
+                )
+                self.assertEqual(200, detail_status)
+                self.assertEqual("succeeded", json.loads(detail_raw)["state"])
+                self.assertEqual("max-players=18\n", properties.read_text())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+    def test_startup_marks_running_operations_outcome_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects, profiles, _properties, adapter_path = _write_disposable_control_tree(root)
+            store = OperationStore(db_path=root / "state" / "operations.db")
+            running = store.create(
+                game_id="minecraft",
+                action="service.start",
+                actor="operator",
+                state="running",
+            )
+
+            server = app.create_server(
+                host="127.0.0.1",
+                port=0,
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+                operation_store=store,
+            )
+            try:
+                recovered = server.control_engine.operation(running["operationId"])
+                self.assertEqual("outcome_unknown", recovered["state"])
+                self.assertIn("host process restarted", recovered["recoveryNote"])
+            finally:
+                server.server_close()
+
     def test_create_server_refuses_non_loopback_hosts_before_binding(self):
         with mock.patch.object(app, "ThreadingHTTPServer") as server_factory:
             for host in ("0.0.0.0", "192.168.1.25", "::", "2001:db8::25", "dashboard.local"):
