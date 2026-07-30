@@ -261,7 +261,8 @@ class OperationStore:
 
     @classmethod
     def _row_to_record(cls, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        postcondition = cls._decode_json(row["postcondition_json"])
+        record = {
             "operationId": row["operation_id"],
             "gameId": row["game_id"],
             "action": row["action"],
@@ -273,9 +274,29 @@ class OperationStore:
             "finishedAt": row["finished_at"],
             "output": row["output"],
             "precondition": cls._decode_json(row["precondition_json"]),
-            "postcondition": cls._decode_json(row["postcondition_json"]),
+            "postcondition": postcondition,
             "recoveryNote": row["recovery_note"],
         }
+        # Lifecycle integration stores the legacy audited apply response under a
+        # namespaced postcondition key. Project only the known compatibility
+        # fields so list/detail and synchronous apply return the same record.
+        result = postcondition.get("result") if isinstance(postcondition, dict) else None
+        if isinstance(result, dict):
+            for key in (
+                "ok",
+                "timestamp",
+                "plannedBy",
+                "planId",
+                "planDigest",
+                "controlId",
+                "before",
+                "after",
+                "restartRequired",
+                "rollbackPath",
+            ):
+                if key in result:
+                    record[key] = result[key]
+        return record
 
     def create(
         self,
