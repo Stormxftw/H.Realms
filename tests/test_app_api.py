@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -530,9 +531,25 @@ class ControlApiTests(unittest.TestCase):
                     method="POST",
                 )
                 with urllib.request.urlopen(local_apply_request, timeout=3) as response:
-                    local_applied = json.load(response)
+                    local_operation = json.load(response)
+                self.assertEqual("local-console", local_operation["actor"])
+                self.assertEqual("queued", local_operation["state"])
+                self.assertNotIn("spoofed", json.dumps(local_operation))
+
+                # Poll the operation until it completes
+                local_op_id = local_operation["operationId"]
+                local_applied = None
+                for _ in range(20):
+                    with urllib.request.urlopen(
+                        f"{base}/api/operations/{local_op_id}", timeout=3
+                    ) as response:
+                        local_applied = json.load(response)
+                    if local_applied["state"] in ("succeeded", "failed"):
+                        break
+                    time.sleep(0.1)
+                self.assertIsNotNone(local_applied)
+                self.assertEqual("succeeded", local_applied["state"])
                 self.assertEqual("local-console", local_applied["actor"])
-                self.assertEqual("local-console", local_applied["plannedBy"])
                 self.assertNotIn("spoofed", json.dumps(local_applied))
                 self.assertEqual("max-players=18\n", properties.read_text(encoding="utf-8"))
 
@@ -612,10 +629,25 @@ class ControlApiTests(unittest.TestCase):
                     method="POST",
                 )
                 with urllib.request.urlopen(apply_request, timeout=3) as response:
-                    applied = json.load(response)
-                self.assertTrue(applied["ok"])
+                    bridge_operation = json.load(response)
+                self.assertEqual("hermes-authenticated-bridge", bridge_operation["actor"])
+                self.assertEqual("queued", bridge_operation["state"])
+                self.assertNotIn("spoofed", json.dumps(bridge_operation))
+
+                # Poll the operation until it completes
+                bridge_op_id = bridge_operation["operationId"]
+                applied = None
+                for _ in range(20):
+                    with urllib.request.urlopen(
+                        f"{base}/api/operations/{bridge_op_id}", timeout=3
+                    ) as response:
+                        applied = json.load(response)
+                    if applied["state"] in ("succeeded", "failed"):
+                        break
+                    time.sleep(0.1)
+                self.assertIsNotNone(applied)
+                self.assertEqual("succeeded", applied["state"])
                 self.assertEqual("hermes-authenticated-bridge", applied["actor"])
-                self.assertEqual("hermes-authenticated-bridge", applied["plannedBy"])
                 self.assertNotIn("spoofed", json.dumps(applied))
                 self.assertEqual("max-players=20\n", properties.read_text(encoding="utf-8"))
                 audit = [
@@ -625,10 +657,6 @@ class ControlApiTests(unittest.TestCase):
                 self.assertEqual(
                     ["local-console", "hermes-authenticated-bridge"],
                     [row["actor"] for row in audit],
-                )
-                self.assertEqual(
-                    ["local-console", "hermes-authenticated-bridge"],
-                    [row["plannedBy"] for row in audit],
                 )
                 self.assertNotIn("spoofed", json.dumps(audit))
             finally:
