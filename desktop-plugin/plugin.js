@@ -20,12 +20,21 @@ import {
   Switch,
   host,
   useMutation,
+  usePluginI18n,
   useQuery,
   useQueryClient,
   useValue,
 } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 import { jsx } from 'react/jsx-runtime'
+import {
+  numericDraft,
+  operationMessage,
+  operationSucceeded,
+  selectKey,
+  selectValue,
+  waitForOperation,
+} from './behavior.mjs'
 
 /** @typedef {string | number | boolean | null | undefined} ControlValue */
 /** @typedef {{ action?: string }} ControlBinding */
@@ -88,7 +97,7 @@ import { jsx } from 'react/jsx-runtime'
  * @property {boolean} restartRequired
  */
 /** @typedef {{ gameId: string, controlId: string, value: ControlValue }} PlanRequest */
-/** @typedef {{ output?: string }} ApplyResult */
+/** @typedef {{ operationId: string, state: string, output?: string, recoveryNote?: string }} OperationRecord */
 /** @typedef {{ label: string, detail: string, at: string }} ActivityItem */
 
 const ID = 'game-host-console'
@@ -260,20 +269,21 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
       children: 'Preview change',
     }, 'preview'))
   } else if (control.kind === 'select') {
+    const options = control.options || []
     body.push(jsx(Select, {
       disabled: !enabled,
-      onValueChange: onValue,
-      value: value === null || value === undefined ? '' : String(value),
+      onValueChange: (/** @type {string} */ key) => onValue(selectValue(options, key)),
+      value: value === null || value === undefined ? '' : selectKey(value),
       children: [
         jsx(SelectTrigger, {
           className: 'w-full',
           children: jsx(SelectValue, { placeholder: 'Choose a value' }),
         }, 'trigger'),
         jsx(SelectContent, {
-          children: (control.options || []).map(option => jsx(SelectItem, {
-            value: String(option.value),
+          children: options.map(option => jsx(SelectItem, {
+            value: selectKey(option.value),
             children: option.label,
-          }, String(option.value))),
+          }, selectKey(option.value))),
         }, 'content'),
       ],
     }, 'select'))
@@ -285,18 +295,24 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
       children: 'Preview change',
     }, 'preview'))
   } else if (control.kind === 'text' || control.kind === 'number') {
+    const numberState = control.kind === 'number'
+      ? numericDraft(value === null || value === undefined ? '' : String(value), control)
+      : { valid: true }
     body.push(jsx(Input, {
       disabled: !enabled,
       max: control.max,
       maxLength: control.maxLength,
       min: control.min,
-      onChange: (/** @type {import('react').ChangeEvent<HTMLInputElement>} */ event) => onValue(control.kind === 'number' ? Number(event.target.value) : event.target.value),
+      onChange: (/** @type {import('react').ChangeEvent<HTMLInputElement>} */ event) => {
+        if (control.kind !== 'number') onValue(event.target.value)
+        else onValue(numericDraft(event.target.value, control).value)
+      },
       step: control.step,
       type: control.kind === 'number' ? 'number' : 'text',
       value: value ?? '',
     }, 'input'))
     body.push(jsx(Button, {
-      disabled: !enabled,
+      disabled: !enabled || !numberState.valid,
       onClick: () => onPreview(control, value),
       size: 'sm',
       variant: 'secondary',
@@ -344,9 +360,13 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
   })
 }
 
-/** @param {import('@hermes/plugin-sdk').PluginContext} ctx */
-function createGameHostPage(ctx) {
+/**
+ * @param {import('@hermes/plugin-sdk').PluginContext} ctx
+ * @param {{ signal: AbortSignal }} runtime
+ */
+function createGameHostPage(ctx, runtime) {
   return function GameHostPage() {
+    const t = usePluginI18n(ID)
     const viewport = useValue(host.state.viewport)
     const queryClient = useQueryClient()
     const [selectedGameId, setSelectedGameId] = useState(() => ctx.storage.get('selectedGame', 'minecraft'))
@@ -376,11 +396,14 @@ function createGameHostPage(ctx) {
       })),
     })
     const applyMutation = useMutation({
-      mutationFn: (/** @type {ActionPlan} */ plan) => /** @type {Promise<ApplyResult>} */ (ctx.rest('/proxy/api/control/apply', {
-        method: 'POST',
-        body: { planId: plan.planId, planDigest: plan.planDigest, confirmed: true, actor: ACTOR },
-        timeoutMs: 320_000,
-      })),
+      mutationFn: async (/** @type {ActionPlan} */ plan) => {
+        const queued = /** @type {OperationRecord} */ (await ctx.rest('/proxy/api/control/apply', {
+          method: 'POST',
+          body: { planId: plan.planId, planDigest: plan.planDigest, confirmed: true, actor: ACTOR },
+          timeoutMs: 15_000,
+        }))
+        return waitForOperation(path => ctx.rest(path, { timeoutMs: 15_000 }), queued, { signal: runtime.signal })
+      },
     })
 
     const catalog = catalogQuery.data
@@ -442,7 +465,7 @@ function createGameHostPage(ctx) {
       if (pendingPlan.risk === 'disruptive' && confirmPhrase !== pendingPlan.gameName) {
         throw new Error(`Type ${pendingPlan.gameName} exactly to confirm this disruptive action.`)
       }
-      const result = await applyMutation.mutateAsync(pendingPlan)
+      const result = /** @type {OperationRecord} */ (await applyMutation.mutateAsync(pendingPlan))
       const key = `${pendingPlan.gameId}:${pendingPlan.controlId}`
       setDrafts(previous => {
         const next = { ...previous }
@@ -451,10 +474,15 @@ function createGameHostPage(ctx) {
       })
       setActivity(previous => [{
         label: pendingPlan.controlLabel,
-        detail: result.output || 'Completed successfully.',
+        detail: operationMessage(result),
         at: new Date().toLocaleTimeString(),
       }, ...previous].slice(0, 8))
       await refreshAll(false)
+      if (!operationSucceeded(result)) {
+        const error = new Error(`${pendingPlan.controlLabel} ${result.state}: ${operationMessage(result)}`)
+        host.notifyError(error, 'Game server operation did not succeed')
+        throw error
+      }
       host.notify({ kind: 'success', message: `${pendingPlan.controlLabel} completed.` })
     }
 
@@ -470,9 +498,9 @@ function createGameHostPage(ctx) {
       return jsx('div', {
         className: 'grid h-full place-items-center p-6',
         children: jsx(ErrorState, {
-          title: 'Game Host Console unavailable',
-          description: error instanceof Error ? error.message : 'The authenticated backend bridge could not be reached.',
-          children: jsx(Button, { onClick: () => refreshAll(false), children: 'Try again' }),
+          title: t('gameHost.unavailableTitle'),
+          description: error instanceof Error ? error.message : t('gameHost.unavailableDescription'),
+          children: jsx(Button, { onClick: () => refreshAll(false), children: t('gameHost.tryAgain') }),
         }),
       })
     }
@@ -691,7 +719,21 @@ const plugin = /** @type {import('@hermes/plugin-sdk').HermesPlugin} */ ({
   name: 'Game Host Console',
   defaultEnabled: false,
   register(ctx) {
-    const GameHostPage = createGameHostPage(ctx)
+    const controller = new AbortController()
+    ctx.onDispose(() => controller.abort())
+    const runtime = { signal: controller.signal }
+    ctx.i18n.register({
+      en: {
+        gameHost: {
+          navLabel: 'Game Host',
+          openLabel: 'Open Game Host Console',
+          unavailableTitle: 'Game Host Console unavailable',
+          unavailableDescription: 'The authenticated backend bridge could not be reached.',
+          tryAgain: 'Try again',
+        },
+      },
+    })
+    const GameHostPage = createGameHostPage(ctx, runtime)
     ctx.registerMany([
       {
         id: 'page',
@@ -703,14 +745,14 @@ const plugin = /** @type {import('@hermes/plugin-sdk').HermesPlugin} */ ({
         id: 'nav',
         area: SIDEBAR_NAV_AREA,
         order: 65,
-        data: { path: ROUTE, label: 'Game Host', codicon: 'server-process' },
+        data: { path: ROUTE, label: ctx.i18n.t('gameHost.navLabel'), codicon: 'server-process' },
       },
       {
         id: 'open',
         area: PALETTE_AREA,
         data: {
           id: 'game-host-console.open',
-          label: 'Open Game Host Console',
+          label: ctx.i18n.t('gameHost.openLabel'),
           keywords: ['game', 'server', 'minecraft', 'palworld', 'host'],
           run: () => host.navigate(ROUTE),
         },

@@ -139,10 +139,55 @@ def probe_listener(
         result = runner(command, timeout=3)
     except Exception as exc:  # runner is an injected system boundary
         result = {"ok": False, "stdout": "", "stderr": str(exc)}
+    return _listener_result_from_snapshot(result, port, normalized_protocol)
+
+
+def shared_listener_probe(
+    *,
+    runner: Callable[..., dict[str, Any]] = _run,
+) -> Callable[[int, str], dict[str, Any]]:
+    """Return a listener probe that reuses one tcp and one udp ss snapshot.
+
+    Meant to be created once per status collection and shared across all
+    games, so listener checks spawn at most two subprocesses (one ``ss -ltn``
+    and one ``ss -lun``) instead of one per declared port.
+    """
+    snapshots: dict[str, dict[str, Any]] = {}
+
+    def probe(port: int, protocol: str) -> dict[str, Any]:
+        normalized_protocol = str(protocol).lower()
+        if normalized_protocol not in {"tcp", "udp"}:
+            return {
+                "port": port,
+                "protocol": normalized_protocol,
+                "ok": False,
+                "listening": None,
+                "error": f"unsupported listener protocol: {protocol}",
+            }
+        if normalized_protocol not in snapshots:
+            command = ["ss", "-ltn" if normalized_protocol == "tcp" else "-lun"]
+            try:
+                snapshots[normalized_protocol] = runner(command, timeout=3)
+            except Exception as exc:  # runner is an injected system boundary
+                snapshots[normalized_protocol] = {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": str(exc),
+                }
+        return _listener_result_from_snapshot(
+            snapshots[normalized_protocol], port, normalized_protocol
+        )
+
+    return probe
+
+
+def _listener_result_from_snapshot(
+    result: dict[str, Any], port: int, protocol: str
+) -> dict[str, Any]:
     if not result.get("ok"):
         return {
             "port": port,
-            "protocol": normalized_protocol,
+            "protocol": protocol,
             "ok": False,
             "listening": None,
             "error": str(result.get("stderr") or "listener probe failed"),
@@ -160,7 +205,7 @@ def probe_listener(
             break
     return {
         "port": port,
-        "protocol": normalized_protocol,
+        "protocol": protocol,
         "ok": True,
         "listening": listening,
         "error": None,

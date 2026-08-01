@@ -12,12 +12,15 @@ logs/*.log.*
 .install-backups/
 .uninstall-backups/
 
+# Test-time scratch state
+tests/operations.db
+
 # Durable operation database and generated operation state
-data/operations.sqlite3
-data/operations.sqlite3-wal
-data/operations.sqlite3-shm
-data/operations.sqlite3-journal
-data/operation-state.json
+data/operations.db
+data/operations.db-wal
+data/operations.db-shm
+data/operations.db-journal
+data/restart-state.json
 data/control-audit.jsonl
 
 # Browser-test output

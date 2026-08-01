@@ -1,7 +1,7 @@
 # Hermes Game Host Console Status
 
-- Status: **Working MVP — Wave 2 integrated, durable operations**
-- Latest verification: `2026-07-30 10:05 EDT`
+- Status: **Working MVP — Wave 2 integrated, durable operations, native SDK + audit-fix pass**
+- Latest verification: `2026-07-31`
 - Product/add-on name: `Hermes Game Host Console`
 - Version: backend `HermesGameHostConsole/0.3`, plugin `0.2.0`
 - Port: `5057` (loopback only by default)
@@ -19,6 +19,18 @@
 - Hermes Desktop disk plugin installed at `~/.hermes/desktop-plugins/game-host-console/`
 - Hermes backend bridge installed at `~/.hermes/plugins/game-host-console/`
 - Plugin listed by dashboard discovery with `has_api: true`
+
+## New SDK migration + audit fixes (July 31, 2026)
+
+- Native uncompiled ESM frontend imports from `@hermes/plugin-sdk`
+- Registers a full route, sidebar nav row, and command-palette action
+- Uses shared React Query plus plugin-scoped `ctx.rest`, `ctx.storage`, and `ctx.i18n`
+- Uses `ctx.i18n.register` + `usePluginI18n` for UI strings and `ctx.onDispose` to stop operation polling cleanly across disable/hot reload
+- Durable mutations submit asynchronously and poll `/api/operations/{id}` until terminal state (`succeeded`, `failed`, `cancelled`, `outcome_unknown`); queued work is no longer reported as completed
+- Operation polling extracted to `desktop-plugin/behavior.mjs` with typed select/numeric helpers and an `AbortSignal`-wired `waitForOperation`
+- Audit pass (13 findings) landed: truthful queued-op polling, queued-op crash recovery (queued -> cancelled on restart), validated bridge query forwarding, redacted `0600` JSONL audit, diagnostics proxy routes removed, canonical state paths under `data/`, private-only LAN discovery, opaque internal errors with correlation IDs
+- Legacy dashboard manifest retained only to mount the authenticated Python backend, preserving dual-host/backend compatibility
+- Added executable operation-polling behavior tests (`tests/desktop_plugin_behavior.test.mjs`) and strengthened the Desktop SDK contract test
 
 ## New in Wave 2 (July 30, 2026)
 
@@ -38,7 +50,8 @@
 - **Safe output limits** — truncation and redaction of sensitive data
 
 ### Test coverage
-- **146 tests passing** (1 pre-existing plugin loader failure unrelated to Wave 2)
+- **158 Python tests passing + 7 Node tests** (5 operation-polling behavior tests, UI suite, Desktop contract test)
+- Type check: `tsc -p tests/tsconfig.desktop-plugin.json` exits 0
 - Full lifecycle integration tests for start/stop/restart/configure operations
 - Backup and restore round-trip tests
 - Operation recovery and retention tests

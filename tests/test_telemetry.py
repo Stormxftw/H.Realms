@@ -100,13 +100,62 @@ class TelemetryTests(unittest.TestCase):
         tcp = telemetry.probe_listener(7777, "tcp", runner=runner)
         udp = telemetry.probe_listener(8211, "udp", runner=runner)
 
-        self.assertEqual(["ss", "-ltn"], calls[0][0])
-        self.assertEqual(["ss", "-lun"], calls[1][0])
+        self.assertEqual([["ss", "-ltn"], ["ss", "-lun"]], [call[0] for call in calls])
         self.assertTrue(tcp["ok"])
         self.assertTrue(tcp["listening"])
         self.assertFalse(udp["ok"])
         self.assertIsNone(udp["listening"])
         self.assertEqual("ss unavailable", udp["error"])
+
+    def test_shared_listener_probe_captures_one_snapshot_per_transport(self):
+        calls = []
+
+        def runner(command, timeout=3):
+            calls.append(command)
+            if "-ltn" in command:
+                return {
+                    "ok": True,
+                    "stdout": "LISTEN 0 128 0.0.0.0:7777 0.0.0.0:*\n"
+                    "LISTEN 0 128 0.0.0.0:8080 0.0.0.0:*",
+                    "stderr": "",
+                }
+            return {"ok": True, "stdout": "UNCONN 0 0 0.0.0.0:8211 0.0.0.0:*", "stderr": ""}
+
+        probe = telemetry.shared_listener_probe(runner=runner)
+
+        tcp_a = probe(7777, "tcp")
+        tcp_b = probe(8080, "tcp")
+        tcp_missing = probe(9999, "tcp")
+        udp = probe(8211, "udp")
+
+        self.assertEqual([["ss", "-ltn"], ["ss", "-lun"]], calls)
+        self.assertTrue(tcp_a["listening"])
+        self.assertTrue(tcp_b["listening"])
+        self.assertFalse(tcp_missing["listening"])
+        self.assertTrue(udp["listening"])
+        self.assertEqual("tcp", tcp_b["protocol"])
+        self.assertEqual("udp", udp["protocol"])
+
+    def test_shared_listener_probe_keeps_error_boundary_shapes(self):
+        calls = []
+
+        def runner(command, timeout=3):
+            calls.append(command)
+            return {"ok": False, "stdout": "", "stderr": "permission denied"}
+
+        probe = telemetry.shared_listener_probe(runner=runner)
+
+        first = probe(25565, "tcp")
+        second = probe(25566, "tcp")
+        unsupported = probe(1, "sctp")
+
+        self.assertEqual([["ss", "-ltn"]], calls)
+        self.assertFalse(first["ok"])
+        self.assertIsNone(first["listening"])
+        self.assertEqual("permission denied", first["error"])
+        self.assertFalse(second["ok"])
+        self.assertFalse(unsupported["ok"])
+        self.assertIn("unsupported", unsupported["error"])
 
     def test_minecraft_probe_parses_success_timeout_and_malformed_packets(self):
         document = {
