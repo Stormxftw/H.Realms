@@ -7,6 +7,7 @@ inside Hermes Desktop and proxies only an explicit set of typed local endpoints.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import re
 import urllib.error
@@ -20,6 +21,8 @@ from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 router = APIRouter()
+
+_LOG = logging.getLogger("hermes-plugin.game-host-console")
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
@@ -39,13 +42,13 @@ PROXY_RULES = {
     ("GET", "api/status"): ProxyRule("api/status", 0, MAX_RESPONSE),
     ("GET", "api/controls"): ProxyRule("api/controls", 0, MAX_RESPONSE),
     ("GET", "api/operations"): ProxyRule("api/operations", 0, 524_288),
-    ("GET", "api/diagnostics"): ProxyRule("api/diagnostics", 0, MAX_RESPONSE),
+
     ("POST", "api/control/plan"): ProxyRule("api/bridge/control/plan", MAX_BODY, 262_144),
     ("POST", "api/control/apply"): ProxyRule("api/bridge/control/apply", MAX_BODY, 262_144),
 }
 DYNAMIC_PROXY_RULES = (
     ("GET", re.compile(r"api/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}"), 524_288),
-    ("GET", re.compile(r"api/diagnostics/[a-z0-9][a-z0-9-]{0,63}"), MAX_RESPONSE),
+
 )
 
 
@@ -143,12 +146,44 @@ async def _read_request_body(request: Request, limit: int) -> bytes:
     return bytes(content)
 
 
-def _proxy(method: str, path: str, body: bytes | None = None) -> Response:
+def _validated_query(path: str, query: dict[str, object] | None) -> str:
+    if not query:
+        return ""
+    if path != "api/operations" or set(query) - {"limit", "gameId", "state"}:
+        raise HTTPException(status_code=400, detail="Invalid proxy query")
+    normalized: dict[str, str] = {}
+    for key, raw in query.items():
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="Invalid proxy query")
+        normalized[key] = raw
+    if "limit" in normalized:
+        try:
+            limit = int(normalized["limit"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid proxy query") from exc
+        if not 1 <= limit <= 500:
+            raise HTTPException(status_code=400, detail="Invalid proxy query")
+    if "gameId" in normalized and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", normalized["gameId"]):
+        raise HTTPException(status_code=400, detail="Invalid proxy query")
+    if "state" in normalized and normalized["state"] not in {
+        "queued", "running", "succeeded", "failed", "cancelled", "outcome_unknown"
+    }:
+        raise HTTPException(status_code=400, detail="Invalid proxy query")
+    return "?" + urllib.parse.urlencode(normalized)
+
+
+def _proxy(
+    method: str,
+    path: str,
+    body: bytes | None = None,
+    *,
+    query: dict[str, object] | None = None,
+) -> Response:
     rule = _proxy_rule(method, path)
     if body is not None and len(body) > rule.max_body:
         raise HTTPException(status_code=413, detail="Request body exceeded safety limit")
     request = urllib.request.Request(
-        f"{SERVICE_BASE}/{rule.upstream_path}",
+        f"{SERVICE_BASE}/{rule.upstream_path}{_validated_query(path, query)}",
         data=body,
         method=method,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -171,9 +206,12 @@ def _proxy(method: str, path: str, body: bytes | None = None) -> Response:
             headers={"Cache-Control": "no-store"},
         )
     except urllib.error.URLError as exc:
+        # Never surface local connection details (addresses, socket errors,
+        # filesystem paths) to the authenticated client. Log server-side only.
+        _LOG.exception("upstream Game Host Console connection failed for %s: %s", path, exc)
         raise HTTPException(
             status_code=503,
-            detail=f"Local Game Host Console is unavailable: {exc.reason}",
+            detail="Local Game Host Console is unavailable.",
         ) from exc
 
 
@@ -201,7 +239,13 @@ def app_js() -> Response:
 async def proxy_get(path: str, request: Request) -> Response:
     rule = _proxy_rule("GET", path)
     await _read_request_body(request, rule.max_body)
-    return await run_in_threadpool(_proxy, "GET", path)
+    query = urllib.parse.parse_qs(
+        request.url.query, keep_blank_values=True, strict_parsing=True
+    )
+    if any(len(values) != 1 for values in query.values()):
+        raise HTTPException(status_code=400, detail="Invalid proxy query")
+    flat_query = {key: values[0] for key, values in query.items()}
+    return await run_in_threadpool(_proxy, "GET", path, None, query=flat_query)
 
 
 @router.post("/proxy/{path:path}")

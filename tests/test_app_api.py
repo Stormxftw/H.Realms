@@ -11,6 +11,7 @@ import unittest
 import urllib.error
 import urllib.request
 from concurrent.futures import Future
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -129,6 +130,115 @@ class ManualExecutor:
 
 
 class ControlApiTests(unittest.TestCase):
+    def test_iso_preserves_epoch_zero(self):
+        self.assertEqual(0, datetime.fromisoformat(app.iso(0)).timestamp())
+
+    def test_discovered_lan_address_rejects_public_and_accepts_private(self):
+        public = [(None, None, None, None, ("8.8.8.8", 0))]
+        private = [(None, None, None, None, ("192.168.1.25", 0))]
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            app.socket, "getaddrinfo", return_value=public
+        ):
+            self.assertIsNone(app.discover_lan_address())
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            app.socket, "getaddrinfo", return_value=private
+        ):
+            self.assertEqual("192.168.1.25", app.discover_lan_address())
+
+    def test_default_stores_are_colocated_with_audit_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects, profiles, _properties, adapter_path = _write_disposable_control_tree(root)
+            audit_path = root / "state" / "control-audit.jsonl"
+            server = app.create_server(
+                host="127.0.0.1", port=0, projects_root=projects,
+                profiles_dir=profiles, audit_path=audit_path,
+                adapter_config_path=adapter_path,
+            )
+            try:
+                self.assertTrue((root / "state" / "operations.db").exists())
+                self.assertEqual(
+                    root / "state" / "restart-state.json",
+                    server.control_engine._restart_state_store.path,
+                )
+            finally:
+                server.server_close()
+
+    def test_status_collection_runs_games_concurrently(self):
+        class CatalogEngine:
+            def catalog(self):
+                return {"games": [{
+                    "id": game_id, "name": game_id, "readiness": "ready",
+                    "projectPresent": True, "blockers": [], "capabilities": {},
+                    "capabilityReasons": {},
+                } for game_id in ("a", "b", "c")]}
+
+            def pending_restart(self, *_args):
+                return {"pending": False, "items": []}
+
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+        gate = threading.Event()
+
+        def collect(**kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                if active == 3:
+                    gate.set()
+            gate.wait(timeout=0.2)
+            with lock:
+                active -= 1
+            return {"id": kwargs["game_id"], "state": "stopped", "online": False,
+                    "process": {"ok": True, "running": False}, "listeners": [],
+                    "query": {}, "connect": {}}
+
+        with mock.patch.object(app, "load_adapters", return_value={key: {} for key in "abc"}):
+            result = app.dashboard_data(
+                CatalogEngine(), Path("ignored"), telemetry_collector=collect,
+                lan_address="192.168.1.1",
+            )
+        self.assertEqual({"a", "b", "c"}, set(result["services"]))
+        self.assertGreaterEqual(peak, 2)
+
+    def test_internal_errors_are_opaque_with_correlation_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects, profiles, _properties, adapter_path = _write_disposable_control_tree(root)
+            server = app.create_server(
+                host="127.0.0.1",
+                port=0,
+                projects_root=projects,
+                profiles_dir=profiles,
+                audit_path=root / "audit.jsonl",
+                adapter_config_path=adapter_path,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_address[1]
+            host = f"127.0.0.1:{port}"
+            try:
+                with mock.patch.object(
+                    server.control_engine,
+                    "catalog",
+                    side_effect=RuntimeError("/home/operator/secret/minecraft/local path"),
+                ):
+                    status, raw = _raw_request(
+                        port, "GET", "/api/status", host_header=host
+                    )
+                self.assertEqual(500, status)
+                payload = json.loads(raw)
+                self.assertEqual("internal server error", payload["error"])
+                self.assertTrue(payload["correlationId"])
+                self.assertNotIn(b"secret", raw)
+                self.assertNotIn(b"local path", raw)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
     def test_apply_returns_202_then_bounded_operation_list_and_detail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -228,7 +338,7 @@ class ControlApiTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=3)
 
-    def test_startup_marks_running_operations_outcome_unknown(self):
+    def test_startup_reconciles_queued_and_running_operations(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             projects, profiles, _properties, adapter_path = _write_disposable_control_tree(root)
@@ -238,6 +348,9 @@ class ControlApiTests(unittest.TestCase):
                 action="service.start",
                 actor="operator",
                 state="running",
+            )
+            queued = store.create(
+                game_id="other", action="backup.create", actor="operator"
             )
 
             server = app.create_server(
@@ -253,6 +366,9 @@ class ControlApiTests(unittest.TestCase):
                 recovered = server.control_engine.operation(running["operationId"])
                 self.assertEqual("outcome_unknown", recovered["state"])
                 self.assertIn("host process restarted", recovered["recoveryNote"])
+                cancelled = server.control_engine.operation(queued["operationId"])
+                self.assertEqual("cancelled", cancelled["state"])
+                self.assertIn("before execution", cancelled["recoveryNote"])
             finally:
                 server.server_close()
 
