@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from diagnostics import redact_text
 from operations import OperationStore
 from registry import ACTION_POLICIES, RISK_LEVELS, GameRegistry, RegistryError
 from restart_state import RestartStateStore, pending_restart_presentation
@@ -971,10 +972,28 @@ class ControlEngine:
         return str(value)
 
     def _append_audit(self, record: dict[str, Any]) -> None:
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+        self.audit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.audit_path.parent, 0o700)
+        safe_record = dict(record)
+        if isinstance(safe_record.get("output"), str):
+            safe_record["output"] = redact_text(
+                safe_record["output"][:4000],
+                redact_private_paths=True,
+                private_path_prefixes=(Path.home(), self.projects_root),
+            )
+        if isinstance(safe_record.get("rollbackPath"), str):
+            safe_record["rollbackPath"] = redact_text(
+                safe_record["rollbackPath"],
+                redact_private_paths=True,
+                private_path_prefixes=(Path.home(), self.projects_root),
+            )
         with self._audit_lock:
-            with self.audit_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+            descriptor = os.open(
+                self.audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600
+            )
+            os.chmod(self.audit_path, 0o600)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(safe_record, separators=(",", ":")) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
 

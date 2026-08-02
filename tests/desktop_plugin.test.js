@@ -11,6 +11,12 @@ assert.match(source, /useQuery/);
 assert.match(source, /useMutation/);
 assert.match(source, /ConfirmDialog/);
 assert.match(source, /ctx\.rest\(['"]\/proxy\/api\/status['"]/);
+// Operation polling is extracted to behavior.mjs and wired through a signal.
+assert.match(source, /waitForOperation\(path => ctx\.rest\(path, \{ timeoutMs: 15_000 \}\), queued, \{ signal: runtime\.signal \}\)/);
+assert.match(source, /from '\.\/behavior\.mjs'/);
+assert.match(source, /ctx\.onDispose\(\(\) => controller\.abort\(\)\)/);
+assert.match(source, /ctx\.i18n\.register\(\{[\s\S]*gameHost:[\s\S]*openLabel:/);
+assert.match(source, /usePluginI18n\(ID\)/);
 assert.match(source, /defaultEnabled:\s*false/);
 assert.match(source, /const ROUTE = ['"]\/game-host['"]/);
 assert.match(source, /disabledReason/);
