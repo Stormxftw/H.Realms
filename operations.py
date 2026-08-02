@@ -511,15 +511,30 @@ class OperationStore:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            timestamp = self._timestamp()
             cursor = connection.execute(
                 """
                 UPDATE operations
                    SET state = 'outcome_unknown', finished_at = ?, recovery_note = ?
                  WHERE state = 'running'
                 """,
-                (self._timestamp(), self._sanitize_text(recovery_note)),
+                (timestamp, self._sanitize_text(recovery_note)),
             )
             recovered = cursor.rowcount
+            queued = connection.execute(
+                """
+                UPDATE operations
+                   SET state = 'cancelled', finished_at = ?, recovery_note = ?
+                 WHERE state = 'queued'
+                """,
+                (
+                    timestamp,
+                    self._sanitize_text(
+                        "host restarted before execution; no command is known to have launched"
+                    ),
+                ),
+            )
+            recovered += queued.rowcount
             connection.commit()
         except sqlite3.Error as exc:
             connection.rollback()

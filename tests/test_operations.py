@@ -67,7 +67,7 @@ class OperationStoreTests(unittest.TestCase):
 
             self.assertEqual([first["operationId"]], [item["operationId"] for item in records])
 
-    def test_recover_interrupted_marks_only_running_operations_unknown(self):
+    def test_recover_interrupted_cancels_queued_and_marks_running_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = OperationStore(db_path=Path(tmp) / "operations.db")
             running = store.create(
@@ -80,12 +80,15 @@ class OperationStoreTests(unittest.TestCase):
 
             recovered = store.recover_interrupted("host process restarted")
 
-            self.assertEqual(1, recovered)
+            self.assertEqual(2, recovered)
             unknown = store.get(running["operationId"])
             self.assertEqual("outcome_unknown", unknown["state"])
             self.assertIsNotNone(unknown["finishedAt"])
             self.assertEqual("host process restarted", unknown["recoveryNote"])
-            self.assertEqual("queued", store.get(queued["operationId"])["state"])
+            cancelled = store.get(queued["operationId"])
+            self.assertEqual("cancelled", cancelled["state"])
+            self.assertIsNotNone(cancelled["finishedAt"])
+            self.assertIn("before execution", cancelled["recoveryNote"])
 
     def test_sensitive_text_is_redacted_and_output_is_deterministically_truncated(self):
         with tempfile.TemporaryDirectory() as tmp:

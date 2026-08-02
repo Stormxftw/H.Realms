@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from control_engine import ControlEngine
+from operations import OperationStore
+from restart_state import RestartStateStore
 
 
 _MC_ADAPTER = {
@@ -51,28 +53,38 @@ class ControlEngineCatalogTests(unittest.TestCase):
         audit_path = repository_root / "tests" / ".real-config-audit-must-not-exist.jsonl"
         self.assertFalse(audit_path.exists())
 
-        engine = ControlEngine(
-            projects_root=Path("/path/to/projects"),
-            profiles_dir=repository_root / "game_profiles",
-            audit_path=audit_path,
-            adapter_config_path=repository_root / "game_adapters.json",
-        )
-        catalog = engine.catalog()
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            engine = ControlEngine(
+                projects_root=Path("/path/to/projects"),
+                profiles_dir=repository_root / "game_profiles",
+                audit_path=audit_path,
+                adapter_config_path=repository_root / "game_adapters.json",
+                operation_store=OperationStore(
+                    db_path=state_root / "operations.db",
+                    private_path_prefixes=(Path.home(), Path("/path/to/projects")),
+                ),
+                restart_state_store=RestartStateStore(
+                    state_root / "restart-state.json"
+                ),
+            )
+            catalog = engine.catalog()
 
-        game_ids = {game["id"] for game in catalog["games"]}
-        self.assertTrue({"minecraft", "palworld"}.issubset(game_ids))
-        self.assertTrue(
-            {
-                "valheim",
-                "cs2",
-                "terraria",
-                "dont-starve-together",
-                "satisfactory",
-                "enshrouded",
-                "sons-of-the-forest",
-            }.issubset(game_ids)
-        )
+            game_ids = {game["id"] for game in catalog["games"]}
+            self.assertTrue({"minecraft", "palworld"}.issubset(game_ids))
+            self.assertTrue(
+                {
+                    "valheim",
+                    "cs2",
+                    "terraria",
+                    "dont-starve-together",
+                    "satisfactory",
+                    "enshrouded",
+                    "sons-of-the-forest",
+                }.issubset(game_ids)
+            )
         self.assertFalse(audit_path.exists())
+        self.assertFalse((repository_root / "tests" / "operations.db").exists())
 
     def test_catalog_game_view_and_plan_use_startup_profile_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -568,6 +580,43 @@ class ControlEngineCatalogTests(unittest.TestCase):
                 calls,
             )
             self.assertEqual("backup created", result["output"])
+
+    def test_jsonl_audit_is_private_bounded_and_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            profiles = root / "profiles"
+            minecraft = projects / "minecraft-server"
+            minecraft.mkdir(parents=True)
+            _create_executable_adapter_scripts(minecraft)
+            profiles.mkdir()
+            (root / "game_adapters.json").write_text(json.dumps(_MC_ADAPTER))
+            (minecraft / "server.properties").write_text("difficulty=normal\n")
+            (profiles / "minecraft.json").write_text(json.dumps({
+                "schemaVersion": "1.0", "id": "minecraft", "name": "Minecraft",
+                "controls": [{"id": "backup-now", "kind": "button", "label": "Backup",
+                              "risk": "safe-mutation", "binding": {"action": "backup.create"}}],
+            }))
+            secret = "sk-1234567890abcdefghijklmnop"
+            engine = ControlEngine(
+                projects_root=projects, profiles_dir=profiles,
+                audit_path=root / "private" / "control-audit.jsonl",
+                command_runner=lambda *_args, **_kwargs: {
+                    "ok": True, "exitCode": 0,
+                    "output": "x" * 6000 + f" token={secret} Authorization: Bearer abcdef {Path.home()}/private",
+                },
+            )
+            plan = engine.plan(game_id="minecraft", control_id="backup-now", value=None, actor="hermes")
+            engine.apply(plan_id=plan["planId"], plan_digest=plan["planDigest"], actor="hermes", confirmed=True)
+
+            audit_path = root / "private" / "control-audit.jsonl"
+            stored = audit_path.read_text()
+            self.assertNotIn(secret, stored)
+            self.assertNotIn(str(Path.home()), stored)
+            self.assertIn("[REDACTED]", stored)
+            self.assertLess(len(stored), 6000)
+            self.assertEqual(0o700, audit_path.parent.stat().st_mode & 0o777)
+            self.assertEqual(0o600, audit_path.stat().st_mode & 0o777)
 
     def test_profile_rejects_unknown_fields_and_unsupported_schema_versions(self):
         with tempfile.TemporaryDirectory() as tmp:

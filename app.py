@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
 import time
 import urllib.parse
-from concurrent.futures import Executor
+import uuid
+from concurrent.futures import Executor, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,10 +50,12 @@ LOCAL_ACTOR = "local-console"
 BRIDGE_ACTOR = "hermes-authenticated-bridge"
 CONTROL_POLICY = "preview-confirm-audit"
 
+_LOGGER = logging.getLogger("game-host-console")
+
 
 def iso(epoch: float | None = None) -> str:
     return datetime.fromtimestamp(
-        epoch or time.time(), timezone.utc
+        time.time() if epoch is None else epoch, timezone.utc
     ).astimezone().isoformat(timespec="seconds")
 
 
@@ -88,6 +92,7 @@ def discover_lan_address() -> str | None:
             and not address.is_loopback
             and not address.is_unspecified
             and not address.is_multicast
+            and (address.is_private or address.is_link_local)
         ):
             return str(address)
     return None
@@ -206,7 +211,7 @@ def dashboard_data(
     detected_lan = lan_address if lan_address is not None else discover_lan_address()
     services: dict[str, Any] = {}
 
-    for game in catalog["games"]:
+    def collect_one(game: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         game_id = str(game["id"])
         readiness = {
             "readiness": game["readiness"],
@@ -222,6 +227,7 @@ def dashboard_data(
                 adapter=adapters[game_id],
                 readiness=readiness,
                 lan_address=detected_lan,
+                listener_probe=shared_listener_probe,
             )
         except Exception as exc:
             # A collector boundary failure is unknown, never silently "offline".
@@ -246,10 +252,19 @@ def dashboard_data(
                 },
                 "connect": {"local": None, "lan": None, "public": None},
             }
-        services[game_id] = {**collected, **readiness}
-        services[game_id]["pendingRestart"] = control_engine.pending_restart(
+        service = {**collected, **readiness}
+        service["pendingRestart"] = control_engine.pending_restart(
             game_id, str(collected.get("state", "unknown"))
         )
+        return game_id, service
+
+    games = catalog["games"]
+    shared_listener_probe = telemetry.shared_listener_probe()
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(games)))) as pool:
+        futures = [pool.submit(collect_one, game) for game in games]
+        for future in as_completed(futures):
+            game_id, service = future.result()
+            services[game_id] = service
 
     return {
         "generatedAt": iso(),
@@ -287,6 +302,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def send_internal_error(self, exc: Exception) -> None:
+        correlation_id = uuid.uuid4().hex
+        _LOGGER.exception(
+            "unhandled error on %s (correlationId=%s): %s",
+            self.command,
+            correlation_id,
+            exc,
+        )
+        self.send_json(
+            500,
+            {
+                "error": "internal server error",
+                "correlationId": correlation_id,
+                "generatedAt": iso(),
+            },
+        )
 
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -403,7 +435,7 @@ class Handler(BaseHTTPRequestHandler):
         except ControlEngineError as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
-            self.send_json(500, {"error": str(exc), "generatedAt": iso()})
+            self.send_internal_error(exc)
 
     def do_POST(self) -> None:
         if self.reject_untrusted_host():
@@ -490,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ControlEngineError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
-            self.send_json(500, {"error": str(exc), "generatedAt": iso()})
+            self.send_internal_error(exc)
 
 
 def accepted_request_host(host_header: str, bound_host: str, bound_port: int) -> bool:
@@ -570,8 +602,13 @@ def create_server(
         profiles_dir=profiles_dir,
         audit_path=audit_path,
         adapter_config_path=config_path,
-        operation_store=operation_store or OperationStore(),
-        restart_state_store=restart_state_store or RestartStateStore(),
+        operation_store=operation_store or OperationStore(
+            db_path=audit_path.with_name("operations.db"),
+            private_path_prefixes=(Path.home(), projects_root),
+        ),
+        restart_state_store=restart_state_store or RestartStateStore(
+            audit_path.with_name("restart-state.json")
+        ),
         status_provider=status_provider,
         executor=executor,
     )

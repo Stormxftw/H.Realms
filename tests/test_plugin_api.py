@@ -107,7 +107,7 @@ class PluginApiTests(unittest.TestCase):
             ("GET", "api/store"),
             ("GET", "api/operations"),
             ("GET", "api/operations/op-123"),
-            ("GET", "api/diagnostics/minecraft"),
+
             ("POST", "api/control/plan"),
             ("POST", "api/control/apply"),
             ("POST", "api/store/install"),
@@ -122,6 +122,46 @@ class PluginApiTests(unittest.TestCase):
                     self.assertGreater(rule.max_body, 0)
                 else:
                     self.assertEqual(0, rule.max_body)
+
+    def test_operations_query_is_validated_and_encoded_before_forwarding(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+        upstream = UpstreamResponse(b"{}")
+        with mock.patch.object(module.urllib.request, "urlopen", return_value=upstream) as urlopen:
+            module._proxy(
+                "GET",
+                "api/operations",
+                query={"limit": "1", "gameId": "minecraft", "state": "failed"},
+            )
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            "http://127.0.0.1:5057/api/operations?limit=1&gameId=minecraft&state=failed",
+            request.full_url,
+        )
+
+        for query in (
+            {"unknown": "x"},
+            {"limit": "0"},
+            {"limit": "501"},
+            {"limit": "nope"},
+            {"state": "not-a-state"},
+            {"gameId": "../escape"},
+            {"limit": ["1", "2"]},
+        ):
+            with self.subTest(query=query):
+                with self.assertRaises(module.HTTPException) as rejected:
+                    module._proxy("GET", "api/operations", query=query)
+                self.assertEqual(400, rejected.exception.status_code)
+
+    def test_diagnostics_routes_are_not_advertised_without_local_handlers(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+        for path in ("api/diagnostics", "api/diagnostics/minecraft"):
+            with self.assertRaises(module.HTTPException) as rejected:
+                module._proxy_rule("GET", path)
+            self.assertEqual(404, rejected.exception.status_code)
 
     def test_service_origin_rejects_nonlocal_or_ambiguous_overrides_before_upstream(self):
         invalid_origins = (
@@ -164,12 +204,17 @@ class PluginApiTests(unittest.TestCase):
         class EmptyRequest:
             headers = {}
 
+            class URL:
+                query = ""
+
+            url = URL()
+
             async def stream(self):
                 yield b""
 
         sentinel = object()
 
-        def slow_proxy(*_args):
+        def slow_proxy(*_args, **_kwargs):
             time.sleep(0.2)
             return sentinel
 
@@ -383,6 +428,23 @@ print("REAL_LOADER_RESULT=" + json.dumps({
 
         self.assertEqual(502, rejected.exception.status_code)
         self.assertEqual([rule.max_response + 1], stream.read_sizes)
+
+    def test_urlerror_is_opaque_and_never_leaks_local_details(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+
+        upstream_error = urllib.error.URLError(
+            OSError("/home/operator/.hermes/secret-socket: connection refused")
+        )
+        with mock.patch.object(module.urllib.request, "urlopen", side_effect=upstream_error):
+            with self.assertRaises(module.HTTPException) as rejected:
+                module._proxy("GET", "health")
+
+        self.assertEqual(503, rejected.exception.status_code)
+        self.assertEqual("Local Game Host Console is unavailable.", rejected.exception.detail)
+        self.assertNotIn("secret", str(rejected.exception.detail))
+        self.assertNotIn("connection refused", str(rejected.exception.detail))
 
     def test_proxy_post_rejects_declared_oversize_before_reading_body(self):
         module = load_plugin_api()
