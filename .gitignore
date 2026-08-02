@@ -19,6 +19,7 @@ data/operations.sqlite3-shm
 data/operations.sqlite3-journal
 data/operation-state.json
 data/control-audit.jsonl
+data/installed.json
 
 # Browser-test output
 /tests/browser/output/
@@ -32,6 +33,12 @@ data/control-audit.jsonl
 /downloads/*.tgz
 /downloads/*.tar.xz
 /downloads/*.7z
+
+# Linked git worktrees checked out inside the repo tree (never commit)
+/.worktrees/
+
+# Stray test-generated sqlite db (not source)
+/tests/operations.db
 
 # Generated prompt-loop run logs
 .promptloop/runs/

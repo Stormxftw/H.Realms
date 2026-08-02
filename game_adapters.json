@@ -35,10 +35,11 @@
         "service.restart": [["scripts/palworld-linux-stop.sh", 120], ["scripts/palworld-linux-start.sh", 60]]
       },
       "propertyTypes": {},
-      "statusCollector": "process_only",
+      "statusCollector": "palworld_rest",
       "processSearch": "PalServer-Linux-Shipping",
       "defaultPort": 8211,
       "portProtocol": "udp",
+      "restPort": 8212,
       "additionalPorts": [
         {"name": "query", "port": 27015, "protocol": "udp"}
       ],

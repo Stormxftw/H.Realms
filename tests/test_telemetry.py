@@ -263,5 +263,124 @@ class TelemetryTests(unittest.TestCase):
         self.assertIsNone(result["connect"]["public"])
 
 
+    def test_aggregate_state_running_beats_setup_readiness(self):
+        needs_setup = {"readiness": "needs_setup", "projectPresent": True}
+        listener_ok = [{"ok": True, "listening": True, "error": None}]
+        query_unused = {"attempted": False, "ok": None, "error": None}
+
+        self.assertEqual(
+            "running_ready",
+            telemetry.aggregate_state(
+                needs_setup,
+                {"ok": True, "running": True},
+                listener_ok,
+                query_unused,
+            ),
+        )
+
+    def test_players_extraction_across_supported_documents(self):
+        minecraft = {
+            "data": {"players": {"online": 2, "max": 10, "sample": [{"name": "Alex"}]}}
+        }
+        a2s = {
+            "data": {"players": 3, "maxPlayers": 16, "name": "Alpha", "map": "arena"}
+        }
+        palworld = {"data": {"players": 4, "server_max_players": 32, "version": "v0.4"}}
+        empty = {"data": {}, "attempted": True}
+
+        self.assertEqual({"online": 2, "max": 10}, telemetry._players_from_query(minecraft))
+        self.assertEqual({"online": 3, "max": 16}, telemetry._players_from_query(a2s))
+        self.assertEqual({"online": 4, "max": 32}, telemetry._players_from_query(palworld))
+        self.assertIsNone(telemetry._players_from_query(empty))
+        self.assertIsNone(telemetry._players_from_query({"data": None}))
+
+    def test_probe_palworld_rest_parses_info_and_fails_soft(self):
+        import io
+
+        class FakeResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        ok = FakeResponse(b'{"players": 7, "server_max_players": 32}')
+        success = telemetry.probe_palworld_rest(port=8212, opener=lambda *_a, **_k: ok)
+        self.assertTrue(success["ok"])
+        self.assertEqual(7, success["data"]["players"])
+
+        timeout = telemetry.probe_palworld_rest(
+            port=8212, opener=lambda *_a, **_k: (_ for _ in ()).throw(socket.timeout("t"))
+        )
+        self.assertEqual("timeout", timeout["errorCode"])
+
+        refused = telemetry.probe_palworld_rest(
+            port=8212, opener=lambda *_a, **_k: (_ for _ in ()).throw(OSError("refused"))
+        )
+        self.assertEqual("network_error", refused["errorCode"])
+
+    def test_collect_palworld_rest_never_degrades_healthy_server_on_optional_query(self):
+        def listener(port, protocol):
+            return {
+                "port": port,
+                "protocol": protocol,
+                "ok": True,
+                "listening": True,
+                "error": None,
+            }
+
+        result_no_rest = telemetry.collect_game(
+            game_id="palworld",
+            name="Palworld",
+            adapter={
+                "statusCollector": "palworld_rest",
+                "processSearch": "PalServer-Linux-Shipping",
+                "defaultPort": 8211,
+                "portProtocol": "udp",
+                "restPort": 8212,
+                "additionalPorts": [{"name": "query", "port": 27015, "protocol": "udp"}],
+            },
+            readiness={"readiness": "needs_setup", "projectPresent": True},
+            process_probe=lambda _n: {"ok": True, "running": True, "pid": 42, "error": None},
+            listener_probe=listener,
+            palworld_rest_probe=lambda **_kwargs: {
+                "attempted": True,
+                "ok": False,
+                "errorCode": "network_error",
+                "error": "REST disabled",
+                "data": None,
+            },
+            lan_address="192.168.50.10",
+        )
+        self.assertEqual("running_ready", result_no_rest["state"])
+        self.assertTrue(result_no_rest["online"])
+        self.assertIsNone(result_no_rest["players"])
+
+        result_with_rest = telemetry.collect_game(
+            game_id="palworld",
+            name="Palworld",
+            adapter={
+                "statusCollector": "palworld_rest",
+                "processSearch": "PalServer-Linux-Shipping",
+                "defaultPort": 8211,
+                "portProtocol": "udp",
+                "restPort": 8212,
+                "additionalPorts": [{"name": "query", "port": 27015, "protocol": "udp"}],
+            },
+            readiness={"readiness": "needs_setup", "projectPresent": True},
+            process_probe=lambda _n: {"ok": True, "running": True, "pid": 42, "error": None},
+            listener_probe=listener,
+            palworld_rest_probe=lambda **_kwargs: {
+                "attempted": True,
+                "ok": True,
+                "errorCode": None,
+                "error": None,
+                "data": {"players": 7, "server_max_players": 32},
+            },
+        )
+        self.assertEqual("running_ready", result_with_rest["state"])
+        self.assertEqual({"online": 7, "max": 32}, result_with_rest["players"])
+
+
 if __name__ == "__main__":
     unittest.main()

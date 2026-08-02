@@ -1,9 +1,9 @@
 # Hermes Game Host Console Status
 
-- Status: **Working MVP — Wave 2 integrated, durable operations**
-- Latest verification: `2026-07-30 10:05 EDT`
+- Status: **Working MVP — Installed/Store model + accurate live status**
+- Latest verification: `2026-08-02 EDT`
 - Product/add-on name: `Hermes Game Host Console`
-- Version: backend `HermesGameHostConsole/0.3`, plugin `0.2.0`
+- Version: backend `HermesGameHostConsole/0.4`, plugin `0.3.0`
 - Port: `5057` (loopback only by default)
 - Local URL: `http://127.0.0.1:5057`
 - Hermes Desktop route: `/game-host`
@@ -11,7 +11,10 @@
 
 ## What works
 
-- Live local console with **9 game profiles** (Minecraft, Palworld, Valheim, CS2, Terraria, Don't Starve Together, Satisfactory, Enshrouded, Sons of the Forest)
+- Live local console with **9 supported game profiles** (Minecraft, Palworld, Valheim, CS2, Terraria, Don't Starve Together, Satisfactory, Enshrouded, Sons of the Forest)
+- **Installed vs Store model** — the sidebar shows only games you have *installed*; the rest live in the **Store** until you add them (from the Store UI or via the Hermes `game-host-console` skill). Seeded on first run from what is present/running.
+- **Accurate live status** — a running process whose listeners are listening reports `RUNNING`, even if setup blockers are pending (setup gates *mutations*, not runtime health)
+- **Player counts** — Minecraft, Source (A2S) and Palworld REST show live `players`; Palworld shows real counts once its REST API is enabled
 - Closed control kinds: button, switch, slider, select, text, number, readonly
 - Declarative profiles in `game_profiles/*.json` (no executable code in profiles)
 - **Data-driven adapter mapping** in `game_adapters.json` — adding a new game no longer requires edits to `control_engine.py`
@@ -19,6 +22,27 @@
 - Hermes Desktop disk plugin installed at `~/.hermes/desktop-plugins/game-host-console/`
 - Hermes backend bridge installed at `~/.hermes/plugins/game-host-console/`
 - Plugin listed by dashboard discovery with `has_api: true`
+
+## New: Installed/Store + accuracy pass (August 2, 2026)
+
+### Accurate runtime status
+- `aggregate_state` now reports `running_ready` whenever the process is running and all declared listeners are listening — setup/readiness blockers no longer downgrade a healthy server to `DEGRADED`
+- `store.py` — `InstalledStore` persists the installed game set at `data/installed.json` (atomic, isolated from tests)
+- `/api/store` lists supported but non-installed games; `POST /api/store/install` and `POST /api/store/uninstall` (actor-bound) scaffold a confined project home and flip the installed flag — server files are kept on uninstall
+- Catalog (`/api/controls`) now carries `installed` per game and `installedIds`
+- Bridge proxy allowlist extended for store GET/POST; Desktop plugin redesigned to show installed servers only with a Store panel
+- New `palworld_rest` status collector (best-effort live player counts; fails soft when the server REST API is off)
+
+### Works on any machine — operation gates on the contract, not the layout
+- **Mutation capability gates on the operational contract**: project dir real + the game's action scripts (`start.sh`/`stop.sh`) present and executable. Where the game binary lives (internal vs external install) no longer matters — the scripts are the user's own and describe it.
+- **`requiredPaths` are now advisory "hints"**, surfaced as a muted `hints` array alongside the catalog — they no longer block Stop/Restart for a server the scripts can already run (fixes the Palworld false "setup needed").
+- **Only capabilities a profile's controls actually use are enforced**, so an empty `propertyTypes` for a game with no config control no longer produces a false `misconfigured` blocker.
+- **Clear, machine-agnostic fix messaging**: missing-project and missing-script blockers now say exactly what to do ("create the project directory with action scripts… or install from the Store / the Hermes game-host-console skill").
+
+### Notes / requirements
+- Live Palworld player counts require enabling the server's REST API: `RESTAPIEnabled=True`, `bShowPlayerList=True` in `PalWorldSettings.ini`, then a server restart. RCON is off and not used.
+- Install creates only the project home + `PROVISION.md`; actual server files/scripts are provisioned via the Hermes skill or manual setup.
+- After reinstalling the plugin, reload Desktop plugins from the command palette and restart the Hermes gateway to pick up the new bridge routes.
 
 ## New in Wave 2 (July 30, 2026)
 
@@ -38,10 +62,12 @@
 - **Safe output limits** — truncation and redaction of sensitive data
 
 ### Test coverage
-- **146 tests passing** (1 pre-existing plugin loader failure unrelated to Wave 2)
+- **154 tests passing** (1 pre-existing Hermes-loader discovery failure unrelated to project code)
 - Full lifecycle integration tests for start/stop/restart/configure operations
 - Backup and restore round-trip tests
 - Operation recovery and retention tests
+- New `test_store_api.py` covering installed persistence, catalog/store, and install/uninstall scaffolding
+
 
 ## New in Wave 1 (July 28, 2026)
 

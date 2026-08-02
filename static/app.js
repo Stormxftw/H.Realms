@@ -113,6 +113,10 @@
     return state.catalog?.games?.find((game) => game.id === gameId) || null;
   }
 
+  function installedGames() {
+    return (state.catalog?.games || []).filter((game) => game.installed === true);
+  }
+
   function setConnectionState(kind, text) {
     const dot = $('#gateway-dot');
     dot.className = `status-dot ${kind}`;
@@ -150,7 +154,14 @@
 
   function renderGameList() {
     gameList.replaceChildren();
-    for (const game of state.catalog?.games || []) {
+    const games = installedGames();
+    if (games.length === 0) {
+      gameList.appendChild(
+        element('p', 'empty-copy', 'No servers installed. Add one from the Store in the Desktop plugin.'),
+      );
+      return;
+    }
+    for (const game of games) {
       const service = serviceFor(game.id);
       const presentation = statusPresentation(game, service || {});
       const button = element('button', `game-row${game.id === state.selectedGameId ? ' active' : ''}`);
@@ -312,7 +323,7 @@
   }
 
   function render() {
-    const game = profileFor(state.selectedGameId) || state.catalog?.games?.[0];
+    const game = profileFor(state.selectedGameId) || installedGames()[0];
     if (!game) return;
     state.selectedGameId = game.id;
     const service = serviceFor(game.id);
