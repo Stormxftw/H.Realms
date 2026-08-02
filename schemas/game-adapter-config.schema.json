@@ -50,8 +50,8 @@
               "additionalProperties": false
             },
             "statusCollector": {
-              "enum": ["minecraft_ping", "steam_query", "process_only"],
-              "description": "How to collect live server status: minecraft_ping uses the MC server list protocol, steam_query uses Steam A2S_INFO, process_only just checks if the process is alive."
+              "enum": ["minecraft_ping", "steam_query", "process_only", "palworld_rest"],
+              "description": "How to collect live server status: minecraft_ping uses the MC server list protocol, steam_query uses Steam A2S_INFO, process_only just checks if the process is alive, palworld_rest queries the Palworld REST info endpoint."
             },
             "processSearch": {
               "type": "string",
@@ -73,6 +73,12 @@
               "minimum": 1,
               "maximum": 65535,
               "description": "Optional protocol-query port when it differs from the game port"
+            },
+            "restPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Palworld REST API port (defaults to the game port + 1 when omitted)"
             },
             "additionalPorts": {
               "type": "array",

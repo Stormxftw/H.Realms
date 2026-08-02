@@ -38,10 +38,13 @@ PROXY_RULES = {
     ("GET", "health"): ProxyRule("health", 0, 16_384),
     ("GET", "api/status"): ProxyRule("api/status", 0, MAX_RESPONSE),
     ("GET", "api/controls"): ProxyRule("api/controls", 0, MAX_RESPONSE),
+    ("GET", "api/store"): ProxyRule("api/store", 0, MAX_RESPONSE),
     ("GET", "api/operations"): ProxyRule("api/operations", 0, 524_288),
     ("GET", "api/diagnostics"): ProxyRule("api/diagnostics", 0, MAX_RESPONSE),
     ("POST", "api/control/plan"): ProxyRule("api/bridge/control/plan", MAX_BODY, 262_144),
     ("POST", "api/control/apply"): ProxyRule("api/bridge/control/apply", MAX_BODY, 262_144),
+    ("POST", "api/store/install"): ProxyRule("api/bridge/store/install", MAX_BODY, 262_144),
+    ("POST", "api/store/uninstall"): ProxyRule("api/bridge/store/uninstall", MAX_BODY, 262_144),
 }
 DYNAMIC_PROXY_RULES = (
     ("GET", re.compile(r"api/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}"), 524_288),

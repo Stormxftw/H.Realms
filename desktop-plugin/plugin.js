@@ -59,7 +59,8 @@ import { jsx } from 'react/jsx-runtime'
  * @property {string} [description]
  * @property {string} [readiness]
  * @property {boolean} [projectPresent]
- * @property {{ message?: string }[]} [blockers]
+ * @property {object[]} [blockers]
+ * @property {object[]} [hints]
  * @property {Control[]} [controls]
  */
 /** @typedef {{ games?: Game[] }} Catalog */
@@ -354,6 +355,7 @@ function createGameHostPage(ctx) {
     const [pendingPlan, setPendingPlan] = useState(/** @type {ActionPlan | null} */ (null))
     const [confirmPhrase, setConfirmPhrase] = useState('')
     const [activity, setActivity] = useState(/** @type {ActivityItem[]} */ ([]))
+    const [showStore, setShowStore] = useState(false)
 
     const statusQuery = useQuery({
       queryKey: [ctx.source, 'status'],
@@ -364,6 +366,14 @@ function createGameHostPage(ctx) {
     const catalogQuery = useQuery({
       queryKey: [ctx.source, 'catalog'],
       queryFn: () => /** @type {Promise<Catalog>} */ (ctx.rest('/proxy/api/controls')),
+      refetchInterval: 30_000,
+      retry: 1,
+    })
+    const storeQuery = useQuery({
+      queryKey: [ctx.source, 'store'],
+      queryFn: () => /** @type {Promise<{ store: Game[], installed: string[] }>} */ (
+        ctx.rest('/proxy/api/store')
+      ),
       refetchInterval: 30_000,
       retry: 1,
     })
@@ -382,11 +392,28 @@ function createGameHostPage(ctx) {
         timeoutMs: 320_000,
       })),
     })
+    const installMutation = useMutation({
+      mutationFn: (/** @type {{ gameId: string }} */ body) => ctx.rest('/proxy/api/store/install', {
+        method: 'POST',
+        body: { ...body, actor: ACTOR },
+        timeoutMs: 30_000,
+      }),
+    })
+    const uninstallMutation = useMutation({
+      mutationFn: (/** @type {{ gameId: string }} */ body) => ctx.rest('/proxy/api/store/uninstall', {
+        method: 'POST',
+        body: { ...body, actor: ACTOR },
+        timeoutMs: 30_000,
+      }),
+    })
 
     const catalog = catalogQuery.data
     const status = statusQuery.data
     const games = catalog?.games || []
-    const game = games.find(item => item.id === selectedGameId) || games[0]
+    const installedGames = games.filter(item => item.installed === true)
+    const storeItems = (storeQuery.data?.store) || []
+    let game = games.find(item => item.id === selectedGameId && item.installed === true)
+    if (!game) game = installedGames[0]
     const service = game ? status?.services?.[game.id] : null
     const online = service?.online === true
     const narrow = viewport?.narrow === true
@@ -418,8 +445,34 @@ function createGameHostPage(ctx) {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: [ctx.source, 'status'] }),
         queryClient.invalidateQueries({ queryKey: [ctx.source, 'catalog'] }),
+        queryClient.invalidateQueries({ queryKey: [ctx.source, 'store'] }),
       ])
       if (showToast) host.notify({ kind: 'success', message: 'Game server state refreshed.' })
+    }
+
+    async function refreshStore() {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: [ctx.source, 'catalog'] }),
+        queryClient.invalidateQueries({ queryKey: [ctx.source, 'store'] }),
+        queryClient.invalidateQueries({ queryKey: [ctx.source, 'status'] }),
+      ])
+    }
+
+    /** @param {string} gameId */
+    async function handleInstall(gameId) {
+      await installMutation.mutateAsync({ gameId })
+      setShowStore(false)
+      selectGame(gameId)
+      await refreshStore()
+      host.notify({ kind: 'success', message: 'Added to your console. Provision server files to start it.' })
+    }
+
+    /** @param {string} gameId */
+    async function handleUninstall(gameId) {
+      await uninstallMutation.mutateAsync({ gameId })
+      if (selectedGameId === gameId) setSelectedGameId('')
+      await refreshStore()
+      host.notify({ kind: 'success', message: 'Removed from your console (server files kept).' })
     }
 
     /** @param {Control} control @param {ControlValue} value */
@@ -477,21 +530,22 @@ function createGameHostPage(ctx) {
       })
     }
 
-    if (!game) {
+    if (!game && !showStore) {
       return jsx('div', {
         className: 'grid h-full place-items-center p-6',
         children: jsx(ErrorState, {
-          title: 'No game profiles installed',
-          description: 'Add a validated declarative profile before using the console.',
+          title: 'No servers installed',
+          description: 'Add a supported game from the Store to manage it here.',
+          children: jsx(Button, { onClick: () => setShowStore(true), children: 'Browse the Store' }),
         }),
       })
     }
 
-    const presentation = statusPresentation(game, service)
+    const presentation = game ? statusPresentation(game, service) : null
     const process = service?.process || {}
     const connect = service?.connect || {}
     const groups = /** @type {Map<string, Control[]>} */ (new Map())
-    for (const control of game.controls || []) {
+    for (const control of (game?.controls || [])) {
       const name = control.group || 'Controls'
       const controls = groups.get(name)
       if (controls) controls.push(control)
@@ -511,24 +565,32 @@ function createGameHostPage(ctx) {
           className: 'mb-4',
           children: [
             jsx('div', { className: 'text-sm font-semibold', children: 'Hosted games' }, 'title'),
-            jsx('div', { className: 'mt-1 text-xs text-muted-foreground', children: 'Typed controls · preview before apply' }, 'subtitle'),
+            jsx('div', { className: 'mt-1 text-xs text-muted-foreground', children: 'Only installed servers · add via Store' }, 'subtitle'),
           ],
         }, 'heading'),
         jsx('div', {
           className: narrow ? 'flex gap-2 overflow-x-auto' : 'grid gap-2',
-          children: games.map(item => {
-            const itemStatus = statusPresentation(item, status?.services?.[item.id])
-            return jsx(Button, {
-              className: narrow ? 'shrink-0 justify-start' : 'w-full justify-start',
-              onClick: () => selectGame(item.id),
-              variant: item.id === game.id ? 'secondary' : 'ghost',
-              children: [
-                jsx(StatusDot, { tone: itemStatus.tone }, 'dot'),
-                jsx('span', { children: item.name }, 'name'),
-              ],
-            }, item.id)
-          }),
+          children: installedGames.length === 0
+            ? jsx('p', { className: 'text-xs text-muted-foreground', children: 'No installed servers yet. Open the Store to add one.' }, 'empty')
+            : installedGames.map(item => {
+                const itemStatus = statusPresentation(item, status?.services?.[item.id])
+                return jsx(Button, {
+                  className: narrow ? 'shrink-0 justify-start' : 'w-full justify-start',
+                  onClick: () => selectGame(item.id),
+                  variant: item.id === game?.id ? 'secondary' : 'ghost',
+                  children: [
+                    jsx(StatusDot, { tone: itemStatus.tone }, 'dot'),
+                    jsx('span', { children: item.name }, 'name'),
+                  ],
+                }, item.id)
+              }),
         }, 'games'),
+        jsx(Button, {
+          className: narrow ? 'shrink-0 justify-start' : 'w-full justify-start',
+          onClick: () => setShowStore(value => !value),
+          variant: showStore ? 'secondary' : 'ghost',
+          children: showStore ? 'Back to console' : 'Browse the Store',
+        }, 'store-toggle'),
         narrow ? null : jsx('div', {
           className: 'mt-6 grid gap-2 text-xs text-muted-foreground',
           children: [
@@ -538,6 +600,89 @@ function createGameHostPage(ctx) {
         }, 'safety'),
       ],
     })
+
+    if (showStore) {
+      const installedSection = jsx('section', {
+        style: { ...panelStyle, padding: '16px', marginBottom: '20px' },
+        children: [
+          jsx('h2', { className: 'text-sm font-semibold', children: 'Installed' }, 'title'),
+          installedGames.length === 0
+            ? jsx('p', { className: 'mt-2 text-xs text-muted-foreground', children: 'Nothing installed yet. Add a game from the list below.' }, 'empty')
+            : jsx('div', {
+                className: 'mt-3 grid gap-2',
+                children: installedGames.map(item => jsx('div', {
+                  key: item.id,
+                  className: 'flex items-center justify-between gap-3',
+                  children: [
+                    jsx('span', { className: 'text-sm font-medium', children: item.name }, 'name'),
+                    jsx(Button, {
+                      disabled: uninstallMutation.isPending,
+                      onClick: () => handleUninstall(item.id),
+                      size: 'sm',
+                      variant: 'ghost',
+                      children: 'Remove',
+                    }, 'remove'),
+                  ],
+                }, item.id)),
+              }, 'list'),
+        ],
+      }, 'installed')
+      const availableSection = jsx('section', {
+        style: { ...panelStyle, padding: '16px' },
+        children: [
+          jsx('h2', { className: 'text-sm font-semibold', children: 'Available to add' }, 'title'),
+          jsx('p', { className: 'mt-1 text-xs leading-5 text-muted-foreground', children: 'Adding a game creates its project home here. Provision the server files afterwards with the Hermes game-host skill or manual setup.' }, 'sub'),
+          storeItems.length === 0
+            ? jsx('p', { className: 'mt-3 text-sm text-muted-foreground', children: 'Every supported game is already installed.' }, 'empty')
+            : jsx('div', {
+                className: 'mt-3 grid gap-3',
+                children: storeItems.map(item => jsx('div', {
+                  key: item.id,
+                  style: { ...panelStyle, padding: '14px' },
+                  children: [
+                    jsx('div', {
+                      className: 'flex items-start justify-between gap-3',
+                      children: [
+                        jsx('div', {
+                          className: 'min-w-0',
+                          children: [
+                            jsx('h4', { className: 'text-sm font-semibold', children: item.name }, 'name'),
+                            item.description ? jsx('p', { className: 'mt-1 text-xs leading-5 text-muted-foreground', children: item.description }, 'desc') : null,
+                          ],
+                        }, 'copy'),
+                        jsx(Button, {
+                          disabled: installMutation.isPending,
+                          onClick: () => handleInstall(item.id),
+                          size: 'sm',
+                          variant: 'secondary',
+                          children: installMutation.isPending ? 'Adding…' : 'Add',
+                        }, 'install'),
+                      ],
+                    }, 'row'),
+                  ],
+                }, item.id)),
+              }, 'list'),
+        ],
+      }, 'available')
+      return jsx('div', {
+        className: 'h-full min-h-0 w-full overflow-hidden',
+        style: {
+          display: 'grid',
+          gridTemplateColumns: narrow ? 'minmax(0, 1fr)' : '240px minmax(0, 1fr)',
+          gridTemplateRows: narrow ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)',
+        },
+        children: [
+          navigation,
+          jsx(ScrollArea, {
+            className: 'h-full min-h-0',
+            children: jsx('main', {
+              style: { margin: '0 auto', maxWidth: '980px', padding: narrow ? '16px' : '24px' },
+              children: [installedSection, availableSection],
+            }),
+          }),
+        ],
+      })
+    }
 
     const content = jsx(ScrollArea, {
       className: 'h-full min-h-0',
@@ -565,6 +710,13 @@ function createGameHostPage(ctx) {
                         className: 'mt-3 grid gap-1 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-5 text-amber-500',
                         children: presentation.reasons.map((reason, index) => jsx('p', { children: reason }, `${index}-${reason}`)),
                       }, 'status-reasons') : null,
+                      game.hints && game.hints.length ? jsx('div', {
+                        className: 'mt-3 grid gap-1 rounded-md border border-neutral-500/20 bg-neutral-500/5 p-3 text-xs leading-5 text-muted-foreground',
+                        children: [
+                          jsx('p', { className: 'font-medium', children: 'Setup hints' }, 'title'),
+                          ...game.hints.map((hint, index) => jsx('p', { children: hint.message }, `hint-${index}`)),
+                        ],
+                      }, 'setup-hints') : null,
                     ],
                   }, 'copy'),
                   jsx(Button, {

@@ -4,6 +4,7 @@ import json
 import socket
 import struct
 import subprocess
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
@@ -324,13 +325,119 @@ def probe_a2s(
             udp_socket.close()
 
 
+def probe_palworld_rest(
+    *,
+    port: int,
+    host: str = "127.0.0.1",
+    timeout: float = 3.0,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, Any]:
+    """Probe the Palworld REST /v1/api/info endpoint when it is enabled.
+
+    Palworld's dedicated server exposes a small HTTP API on RESTAPIPort for live
+    info and player listings. If REST is not enabled (or the endpoint is unreachable)
+    this fails softly so the running server is not reported as degraded on account of
+    an optional statistics endpoint. Player counts are a best-effort enrichment.
+    """
+    url = f"http://{host}:{port}/v1/api/info"
+    try:
+        with opener(url, timeout=timeout) as response:
+            body = bytearray()
+            while True:
+                chunk = response.read(65_536)
+                if not chunk:
+                    break
+                if len(body) + len(chunk) > 1_000_000:
+                    break
+                body.extend(chunk)
+        document = json.loads(bytes(body).decode("utf-8", errors="replace"))
+        if not isinstance(document, dict):
+            raise ValueError("Palworld info is not an object")
+        return {
+            "attempted": True,
+            "ok": True,
+            "errorCode": None,
+            "error": None,
+            "data": document,
+        }
+    except (socket.timeout, TimeoutError) as exc:
+        return {
+            "attempted": True,
+            "ok": False,
+            "errorCode": "timeout",
+            "error": str(exc) or "query timed out",
+            "data": None,
+        }
+    except json.JSONDecodeError as exc:
+        return {
+            "attempted": True,
+            "ok": False,
+            "errorCode": "malformed_response",
+            "error": str(exc),
+            "data": None,
+        }
+    except (ValueError, UnicodeError) as exc:
+        return {
+            "attempted": True,
+            "ok": False,
+            "errorCode": "malformed_response",
+            "error": str(exc),
+            "data": None,
+        }
+    except OSError as exc:
+        return {
+            "attempted": True,
+            "ok": False,
+            "errorCode": "network_error",
+            "error": str(exc),
+            "data": None,
+        }
+
+
+def _players_from_query(query: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract an online/max preview from supported status documents."""
+    data = query.get("data")
+    if not isinstance(data, dict):
+        return None
+    players_blob = data.get("players")
+    online: int | None = None
+    maximum: int | None = None
+
+    if isinstance(players_blob, dict):
+        # Minecraft: {"players": {"online": n, "max": m, ...}}
+        o = players_blob.get("online")
+        m = players_blob.get("max")
+        if isinstance(o, int):
+            online = o
+        if isinstance(m, int):
+            maximum = m
+    elif isinstance(players_blob, int):
+        # Source A2S_INFO and Palworld REST put raw counts here.
+        online = players_blob
+        for key in ("maxPlayers", "max_players", "server_max_players"):
+            value = data.get(key)
+            if isinstance(value, int):
+                maximum = value
+                break
+
+    if online is None:
+        return None
+    return {"online": online, "max": maximum}
+
+
 def aggregate_state(
     readiness: dict[str, Any],
     process: dict[str, Any],
     listeners: list[dict[str, Any]],
     query: dict[str, Any],
 ) -> str:
-    """Combine independent evidence without converting probe errors into stopped."""
+    """Combine independent evidence without converting probe errors into stopped.
+
+    Runtime health is driven by live process and listener evidence. Installation
+    readiness (setup blockers) gates *mutations*, not the live state: a process
+    that is running and whose declared listeners are listening is ``running_ready``
+    even if setup checks are still incomplete.
+    """
     if readiness.get("projectPresent") is False:
         return "not_installed"
     if not process.get("ok") or process.get("running") is None:
@@ -338,8 +445,7 @@ def aggregate_state(
     if process.get("running") is False:
         return "stopped"
 
-    degraded = readiness.get("readiness") != "ready"
-    degraded = degraded or any(
+    degraded = any(
         not listener.get("ok") or listener.get("listening") is not True
         for listener in listeners
     )
@@ -366,6 +472,7 @@ def collect_game(
     listener_probe: Callable[[int, str], dict[str, Any]] = probe_listener,
     minecraft_probe: Callable[..., dict[str, Any]] = probe_minecraft,
     a2s_probe: Callable[..., dict[str, Any]] = probe_a2s,
+    palworld_rest_probe: Callable[..., dict[str, Any]] = probe_palworld_rest,
     lan_address: str | None = None,
 ) -> dict[str, Any]:
     """Collect independent process, listener, and protocol-query evidence."""
@@ -386,6 +493,8 @@ def collect_game(
 
     collector = str(adapter.get("statusCollector", "process_only"))
     query_port = int(adapter.get("queryPort", default_port))
+    if collector == "palworld_rest":
+        query_port = int(adapter.get("restPort", default_port + 1))
     query: dict[str, Any] = {
         "attempted": False,
         "ok": None,
@@ -398,8 +507,18 @@ def collect_game(
             query = minecraft_probe(port=query_port, host="127.0.0.1")
         elif collector == "steam_query":
             query = a2s_probe(port=query_port, host="127.0.0.1")
+        elif collector == "palworld_rest":
+            query = palworld_rest_probe(port=query_port, host="127.0.0.1")
 
-    state = aggregate_state(readiness, process, listeners, query)
+    # Optional statistics collectors (Palworld REST) must never mark a healthy
+    # running server degraded just because an auxiliary endpoint is disabled.
+    query_degrades = collector in {"minecraft_ping", "steam_query"}
+    state_query = (
+        query
+        if query_degrades
+        else {"attempted": False, "ok": None, "errorCode": None, "error": None, "data": None}
+    )
+    state = aggregate_state(readiness, process, listeners, state_query)
     return {
         "id": game_id,
         "name": name,
@@ -407,6 +526,7 @@ def collect_game(
         "online": state in {"running_ready", "running_degraded"},
         "process": process,
         "listeners": listeners,
+        "players": _players_from_query(query),
         "query": {"collector": collector, "port": query_port, **query},
         "connect": {
             "local": _endpoint("127.0.0.1", default_port),

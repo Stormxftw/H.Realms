@@ -249,7 +249,11 @@ class ControlEngine:
         blockers: list[dict[str, str]] = []
 
         if not project_path.exists():
-            message = "Create the configured project directory and install the game server files."
+            message = (
+                "Install this game: create the project directory with action scripts "
+                "(start.sh / stop.sh), or install it from the Store / the Hermes "
+                "game-host-console skill."
+            )
             blockers.append(
                 {
                     "code": "project_missing",
@@ -286,8 +290,14 @@ class ControlEngine:
                 "capabilityReasons": reasons,
             }
 
-        setup_blockers: list[dict[str, str]] = []
-        invalid_evidence = False
+        # requiredPaths are advisory "setup hints", not hard mutation gates. The
+        # console operates a game by executing its action scripts (start.sh/stop.sh)
+        # in the project dir — that is the real operational contract, and it works
+        # on any machine because the scripts are the user's own. Where the game
+        # binary actually lives varies by installer (internal or external install),
+        # so requiredPaths must never disable controls for a server the scripts can
+        # already run. They surface as clear, non-blocking guidance instead.
+        hints: list[dict[str, str]] = []
         try:
             resolved_project = project_path.resolve(strict=True)
         except (OSError, RuntimeError):
@@ -301,46 +311,47 @@ class ControlEngine:
                 resolved = candidate.resolve(strict=True)
             except (OSError, RuntimeError):
                 resolved = None
-            if resolved is None:
-                setup_blockers.append(
+            inside = bool(
+                resolved is not None and resolved.is_relative_to(resolved_project)
+            )
+            valid_type = (
+                bool(resolved is not None and resolved.is_file())
+                if expected_type == "file"
+                else bool(resolved is not None and resolved.is_dir())
+            )
+            if resolved is None or candidate.is_symlink() or not inside or not valid_type:
+                hints.append(
                     {
-                        "code": f"{kind}_missing",
+                        "code": f"{kind}_hint",
                         "kind": kind,
                         "path": relative.as_posix(),
                         "message": evidence.get("description")
-                        or f"Add the required {kind}: {relative.as_posix()}.",
+                        or (
+                            f"Setup hint: expected {relative.as_posix()} in the "
+                            "project directory. Not required to operate a running "
+                            "server — provide start.sh/stop.sh action scripts to "
+                            "enable Start/Stop here, or run the Hermes "
+                            "game-host-console skill to provision."
+                        ),
                     }
                 )
-                continue
-            valid_type = resolved.is_file() if expected_type == "file" else resolved.is_dir()
-            if (
-                not resolved.is_relative_to(resolved_project)
-                or candidate.is_symlink()
-                or not valid_type
-            ):
-                invalid_evidence = True
-                setup_blockers.append(
-                    {
-                        "code": f"{kind}_invalid",
-                        "kind": kind,
-                        "path": relative.as_posix(),
-                        "message": f"Fix required {kind} evidence: {relative.as_posix()}.",
-                    }
-                )
-        if setup_blockers:
-            blockers.extend(setup_blockers)
-            message = "Complete the listed installation setup before running mutations."
-            for capability in capabilities:
-                reasons[capability] = message
-            return {
-                "readiness": "misconfigured" if invalid_evidence else "needs_setup",
-                "projectPresent": True,
-                "blockers": blockers,
-                "capabilities": capabilities,
-                "capabilityReasons": reasons,
-            }
 
+        # Only the capabilities a profile's controls actually reference are
+        # enforced. Enforcing every capability on every game turns an unsupported
+        # (unused) action — e.g. an empty propertyTypes for a game with no config
+        # control — into a false "misconfigured" blocker.
+        used_actions = {
+            str(control.get("binding", {}).get("action", ""))
+            for control in self._registry.profile(game_id).get("controls", [])
+        }
+        used_capabilities = {
+            capability
+            for action, capability in self._ACTION_CAPABILITIES.items()
+            if action in used_actions
+        }
         for capability, action in self._CAPABILITY_ACTIONS.items():
+            if capability not in used_capabilities:
+                continue
             try:
                 if action == "property.set":
                     if not adapter.get("propertyTypes"):
@@ -353,7 +364,11 @@ class ControlEngine:
                 else:
                     self._registry.validated_commands(game_id, action)
             except RegistryError as exc:
-                reason = f"Configure {action} for {game_id}: {exc}."
+                reason = (
+                    f"Configure {action} for {game_id}: {exc}. Create the executable "
+                    f"action script(s) in the project dir, or run the Hermes "
+                    f"game-host-console skill to provision this game."
+                )
                 reasons[capability] = reason
                 if action in adapter.get("commands", {}) or action == "property.set":
                     blockers.append(
@@ -376,6 +391,7 @@ class ControlEngine:
             "blockers": blockers,
             "capabilities": capabilities,
             "capabilityReasons": reasons,
+            "hints": hints,
         }
 
     def plan(self, *, game_id: str, control_id: str, value: Any, actor: str) -> dict[str, Any]:

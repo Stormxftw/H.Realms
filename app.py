@@ -24,6 +24,7 @@ from control_engine import (
 )
 from operations import OperationStore
 from restart_state import RestartStateStore
+from store import InstalledStore
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -100,8 +101,96 @@ def load_adapters(path: Path) -> dict[str, dict[str, Any]]:
     return games
 
 
-def catalog_data(control_engine: ControlEngine) -> dict[str, Any]:
-    return {**control_engine.catalog(), **control_policy_fields()}
+def catalog_data(
+    control_engine: ControlEngine,
+    installed_store: InstalledStore | None = None,
+) -> dict[str, Any]:
+    installed = installed_store.installed_ids() if installed_store else set()
+    catalog = control_engine.catalog()
+    for game in catalog["games"]:
+        game["installed"] = game["id"] in installed
+    catalog["installedIds"] = sorted(installed)
+    return {**catalog, **control_policy_fields()}
+
+
+def store_data(
+    control_engine: ControlEngine,
+    installed_store: InstalledStore | None = None,
+) -> dict[str, Any]:
+    """Return the store catalog: every supported game plus the installed set."""
+    installed = installed_store.installed_ids() if installed_store else set()
+    catalog = control_engine.catalog()
+    available: list[dict[str, Any]] = []
+    for game in catalog["games"]:
+        entry = {
+            "id": game["id"],
+            "name": game["name"],
+            "description": game.get("description", ""),
+            "installed": game["id"] in installed,
+            "projectPresent": bool(game.get("projectPresent")),
+            "readiness": game.get("readiness"),
+            "notes": game.get("notes", ""),
+        }
+        if not entry["installed"]:
+            available.append(entry)
+    return {
+        "generatedAt": iso(),
+        "installed": sorted(installed),
+        "store": available,
+    }
+
+
+def seed_installed_from_runtime(
+    control_engine: ControlEngine,
+    installed_store: InstalledStore,
+    status_provider: Callable[[str], dict[str, Any]],
+) -> None:
+    """Seed the installed set from what is actually present/running on first use."""
+    if installed_store.installed_ids():
+        return
+    for game in control_engine.catalog()["games"]:
+        game_id = str(game["id"])
+        if game.get("projectPresent"):
+            installed_store.install(game_id)
+            continue
+        try:
+            if status_provider(game_id).get("online") is True:
+                installed_store.install(game_id)
+        except Exception:
+            # A non-authoritative seed must never crash startup.
+            continue
+
+
+def scaffold_project(
+    projects_root: Path,
+    adapter_config_path: Path,
+    game_id: str,
+) -> str | None:
+    """Create the game's project directory under PROJECTS_ROOT if it is absent.
+
+    Server files and action scripts are provisioned by the Hermes game-host
+    skill / manual setup afterwards; this only creates a confined, empty home.
+    """
+    adapters = load_adapters(adapter_config_path)
+    if game_id not in adapters:
+        raise ControlEngineError(f"unknown game: {game_id}")
+    project_dir = str(adapters[game_id]["projectDir"])
+    root = projects_root.resolve()
+    target = (projects_root / project_dir).resolve()
+    if not target.is_relative_to(root):
+        raise ControlEngineError("project path escapes PROJECTS_ROOT")
+    target.mkdir(parents=True, exist_ok=True)
+    note = target / "PROVISION.md"
+    if not note.exists():
+        note.write_text(
+            "# Provisioning\n\n"
+            f"Game `{game_id}` was added to the console from the Store. Its server "
+            "files and action scripts are not yet installed. Use the Hermes "
+            "`game-host-console` skill (or manual setup in this directory) to "
+            "provision `start.sh` / `stop.sh` and the server binary.\n",
+            encoding="utf-8",
+        )
+    return str(target)
 
 
 def dashboard_data(
@@ -255,7 +344,21 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 )
             elif path == "/api/controls":
-                self.send_json(200, catalog_data(self.control_engine))
+                self.send_json(
+                    200,
+                    catalog_data(
+                        self.control_engine,
+                        getattr(self.server, "installed_store", None),
+                    ),
+                )
+            elif path == "/api/store":
+                self.send_json(
+                    200,
+                    store_data(
+                        self.control_engine,
+                        getattr(self.server, "installed_store", None),
+                    ),
+                )
             elif path == "/api/operations":
                 query = urllib.parse.parse_qs(
                     parsed.query, keep_blank_values=True, strict_parsing=True
@@ -315,6 +418,14 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/control/apply": LOCAL_ACTOR,
                 "/api/bridge/control/apply": BRIDGE_ACTOR,
             }
+            store_install_actors = {
+                "/api/store/install": LOCAL_ACTOR,
+                "/api/bridge/store/install": BRIDGE_ACTOR,
+            }
+            store_uninstall_actors = {
+                "/api/store/uninstall": LOCAL_ACTOR,
+                "/api/bridge/store/uninstall": BRIDGE_ACTOR,
+            }
             if self.path in plan_actors:
                 result = self.control_engine.plan(
                     game_id=str(body.get("gameId", "")),
@@ -339,6 +450,32 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 )
                 self.send_json(202, result)
+            elif self.path in store_install_actors or self.path in store_uninstall_actors:
+                install = self.path in store_install_actors
+                game_id = str(body.get("gameId", ""))
+                if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", game_id):
+                    raise ControlEngineError("invalid game id")
+                installed_store = self.server.installed_store
+                if install:
+                    installed_store.install(game_id)
+                    scaffolded = scaffold_project(
+                        self.server.projects_root,
+                        self.server.adapter_config_path,
+                        game_id,
+                    )
+                else:
+                    installed_store.uninstall(game_id)
+                    scaffolded = None
+                self.send_json(
+                    200,
+                    {
+                        "gameId": game_id,
+                        "installed": install,
+                        "installedIds": sorted(installed_store.installed_ids()),
+                        "projectDir": scaffolded,
+                        "generatedAt": iso(),
+                    },
+                )
             else:
                 self.send_json(404, {"error": "not found"})
         except OperationConflictError as exc:
@@ -403,6 +540,7 @@ def create_server(
     operation_store: OperationStore | None = None,
     restart_state_store: RestartStateStore | None = None,
     executor: Executor | None = None,
+    installed_store: InstalledStore | None = None,
 ) -> ThreadingHTTPServer:
     require_loopback_host(host)
     config_path = Path(adapter_config_path or ADAPTER_CONFIG_PATH)
@@ -439,11 +577,15 @@ def create_server(
     )
     engine_holder["engine"] = control_engine
     control_engine.recover_interrupted_operations()
+    installed_store = installed_store or InstalledStore(ROOT / "data" / "installed.json")
+    seed_installed_from_runtime(control_engine, installed_store, status_provider)
     server = GameHostHTTPServer((host, port), Handler)
     server.control_engine = control_engine  # type: ignore[attr-defined]
     server.adapter_config_path = config_path  # type: ignore[attr-defined]
     server.telemetry_collector = telemetry_collector  # type: ignore[attr-defined]
     server.lan_address = lan_address  # type: ignore[attr-defined]
+    server.installed_store = installed_store  # type: ignore[attr-defined]
+    server.projects_root = Path(projects_root)  # type: ignore[attr-defined]
     return server
 
 

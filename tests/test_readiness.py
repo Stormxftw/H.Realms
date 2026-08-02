@@ -154,13 +154,21 @@ class ReadinessTests(unittest.TestCase):
 
             partial = engine.game_view("alpha")
 
-            self.assertEqual("needs_setup", partial["readiness"])
+            # requiredPaths are advisory hints, not gates: with action scripts
+            # present, Start is enabled even when the canonical binary/config/save
+            # paths are absent. The config control stays gated until a real
+            # server.properties exists (the operational contract).
+            self.assertEqual("misconfigured", partial["readiness"])
             self.assertEqual(
-                {"binary_missing", "config_missing", "world_missing"},
+                {"capability_misconfigured"},
                 {blocker["code"] for blocker in partial["blockers"]},
             )
-            self.assertFalse(partial["capabilities"]["canStart"])
+            self.assertTrue(partial["capabilities"]["canStart"])
             self.assertFalse(partial["capabilities"]["canConfigure"])
+            self.assertEqual(
+                {"binary_hint", "config_hint", "world_hint"},
+                {hint["code"] for hint in partial["hints"]},
+            )
 
             (project / "alpha-server.bin").write_bytes(b"server")
             (project / "server.properties").write_text(
@@ -171,8 +179,35 @@ class ReadinessTests(unittest.TestCase):
             ready = engine.game_view("alpha")
             self.assertEqual("ready", ready["readiness"])
             self.assertEqual([], ready["blockers"])
+            self.assertEqual([], ready["hints"])
             self.assertTrue(ready["capabilities"]["canStart"])
             self.assertTrue(ready["capabilities"]["canConfigure"])
+
+    def test_required_paths_are_advisory_for_running_external_server(self):
+        # Palworld-style: the project dir holds only the action scripts, while the
+        # real binary/save lives outside it. The console must still allow Start/Stop
+        # based on the operational contract (scripts present + executable), and must
+        # surface the canonical layout as non-blocking hints.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            engine, _project = write_game(
+                root,
+                create_project=True,
+                adapter_overrides={
+                    "requiredPaths": [
+                        {"path": "Pal/Binaries/Linux/PalServer", "kind": "binary", "type": "file"},
+                        {"path": "Pal/Saved/SaveGames", "kind": "save", "type": "directory"},
+                    ]
+                },
+            )
+            view = engine.game_view("alpha")
+            self.assertEqual("ready", view["readiness"])
+            self.assertTrue(view["capabilities"]["canStart"])
+            self.assertTrue(view["capabilities"]["canStop"])
+            self.assertEqual([], view["blockers"])
+            hint_codes = {hint["code"] for hint in view["hints"]}
+            self.assertIn("binary_hint", hint_codes)
+            self.assertIn("save_hint", hint_codes)
 
     def test_present_project_with_broken_approved_script_is_misconfigured(self):
         with tempfile.TemporaryDirectory() as tmp:

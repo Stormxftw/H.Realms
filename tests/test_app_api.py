@@ -154,6 +154,7 @@ class ControlApiTests(unittest.TestCase):
                     "query": {"attempted": False, "ok": None, "error": None},
                     "connect": {"local": None, "lan": None, "public": None},
                 },
+                installed_store=app.InstalledStore(root / "state" / "installed.json"),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -248,6 +249,7 @@ class ControlApiTests(unittest.TestCase):
                 audit_path=root / "audit.jsonl",
                 adapter_config_path=adapter_path,
                 operation_store=store,
+                installed_store=app.InstalledStore(root / "state" / "installed.json"),
             )
             try:
                 recovered = server.control_engine.operation(running["operationId"])
@@ -283,6 +285,7 @@ class ControlApiTests(unittest.TestCase):
                 profiles_dir=profiles,
                 audit_path=root / "audit.jsonl",
                 adapter_config_path=adapter_path,
+                installed_store=app.InstalledStore(root / "state" / "installed.json"),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -353,6 +356,7 @@ class ControlApiTests(unittest.TestCase):
                 profiles_dir=profiles,
                 audit_path=root / "audit.jsonl",
                 adapter_config_path=adapter_path,
+                installed_store=app.InstalledStore(root / "state" / "installed.json"),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -397,6 +401,7 @@ class ControlApiTests(unittest.TestCase):
                 adapter_config_path=adapter_path,
                 telemetry_collector=collect,
                 lan_address=None,
+                installed_store=app.InstalledStore(root / "state" / "installed.json"),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -479,6 +484,7 @@ class ControlApiTests(unittest.TestCase):
                 profiles_dir=profiles,
                 audit_path=root / "audit.jsonl",
                 adapter_config_path=adapter_path,
+                installed_store=app.InstalledStore(root / "state" / "installed.json"),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()

@@ -104,11 +104,14 @@ class PluginApiTests(unittest.TestCase):
             ("GET", "health"),
             ("GET", "api/status"),
             ("GET", "api/controls"),
+            ("GET", "api/store"),
             ("GET", "api/operations"),
             ("GET", "api/operations/op-123"),
             ("GET", "api/diagnostics/minecraft"),
             ("POST", "api/control/plan"),
             ("POST", "api/control/apply"),
+            ("POST", "api/store/install"),
+            ("POST", "api/store/uninstall"),
         )
         for method, path in allowed:
             with self.subTest(method=method, path=path):
