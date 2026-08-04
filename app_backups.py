@@ -16,9 +16,14 @@ Two game layouts are supported, driven by the adapter:
     `sourceDir`, and a relative `backupDir`. The manager then confines within
     that external tree — the confinement invariant is preserved, not bypassed.
 
-Restore *preview* is exposed (read-only, returns the confirmation token).
-Restore *execute* is NOT exposed — it overwrites live data and stays unwired
-until it is deliberately warranted.
+Restore *preview* (read-only, returns confirmation token) and *execute* are
+exposed. Execute is destructive (overwrites the source tree) and heavily guarded:
+- server must report STOPPED
+- exact confirmation token from a recent preview is required
+- automatic verified pre-restore safety backup is created first
+- atomic rollback + re-verification on any failure during mutation
+
+The manager still enforces all confinement, validation, and safety invariants.
 
 Unknown games / artifacts surface as BackupNotFoundError (404). Business-rule
 failures (bad label, confinement, verification) surface as BackupOperationError
@@ -193,4 +198,51 @@ def preview_restore(
         "archiveEntries": list(preview.archive_entries),
         "willReplace": list(preview.will_replace),
         "requiredConfirmation": preview.required_confirmation,
+    }
+
+
+def execute_restore(
+    engine: Any,
+    game_id: str,
+    preview_id: str,
+    confirmation: str,
+    *,
+    server_state: str,
+) -> dict[str, Any]:
+    """Execute a previously previewed restore (destructive operation).
+
+    The caller must declare server_state="stopped". The underlying
+    BackupManager enforces stopped state, requires the exact confirmation
+    token from the preview, creates a verified pre-restore safety backup,
+    stages the restore, performs atomic replace with rollback on any error,
+    and re-validates everything.
+    """
+    root = _project_root(engine, game_id)
+    manager = _manager(engine, root, game_id)
+    try:
+        state = backups.ServerState(server_state)
+    except ValueError as exc:
+        raise BackupOperationError(f"invalid server state: {server_state}") from exc
+    try:
+        result = manager.execute_restore(
+            preview_id,
+            confirmation=confirmation,
+            server_state=state,
+        )
+    except backups.ArtifactNotFoundError as exc:
+        raise BackupNotFoundError(f"unknown backup artifact for preview: {preview_id}") from exc
+    except (
+        backups.ConfirmationError,
+        backups.ServerStateError,
+        backups.RestoreError,
+        backups.BackupError,
+    ) as exc:
+        raise BackupOperationError(str(exc)) from exc
+
+    return {
+        "gameId": game_id,
+        "artifactId": result.artifact_id,
+        "sourceIdentity": result.source_identity,
+        "safetyBackup": _artifact_dict(result.safety_backup),
+        "restoredEntries": list(result.restored_entries),
     }

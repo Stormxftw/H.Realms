@@ -605,6 +605,24 @@ class Handler(BaseHTTPRequestHandler):
                         server_state=server_state,
                     ),
                 )
+            elif (
+                match := re.fullmatch(
+                    r"/api/backups/([a-z0-9][a-z0-9-]{0,63})/restore", self.path
+                )
+            ):
+                preview_id = str(body.get("previewId", ""))
+                confirmation = str(body.get("confirmation", ""))
+                server_state = str(body.get("serverState", "stopped"))
+                self.send_json(
+                    200,
+                    app_backups.execute_restore(
+                        self.control_engine,
+                        match.group(1),
+                        preview_id,
+                        confirmation,
+                        server_state=server_state,
+                    ),
+                )
             else:
                 self.send_json(404, {"error": "not found"})
         except OperationConflictError as exc:
