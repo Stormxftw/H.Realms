@@ -1,5 +1,7 @@
 # Contributing game profiles
 
+> The repository deliberately ships only Minecraft and Palworld. For a private server, use the bundled `hermes-game-host-console` skill and let your Hermes Agent create ignored machine-local profiles and adapters. Open a pull request only when you intend to maintain a sanitized profile for others.
+
 The Store is fed by the official repository. A merged package becomes visible through `catalog/index.json`; the app refreshes that index from GitHub, verifies the package digest and schemas, and keeps a verified offline cache.
 
 ## Add a game

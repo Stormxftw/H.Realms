@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 BACKEND_TARGET="$HERMES_HOME/plugins/game-host-console/dashboard"
 DESKTOP_TARGET="$HERMES_HOME/desktop-plugins/game-host-console"
+SKILL_TARGET="$HERMES_HOME/skills/gaming/hermes-game-host-console"
 LEGACY_DISABLED_TARGET="$HERMES_HOME/desktop-plugins/game-host-console.disabled"
 BACKUP_ROOT="$ROOT/.install-backups"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -19,16 +20,21 @@ if [[ -d "$DESKTOP_TARGET" ]]; then
   mkdir -p "$BACKUP/desktop"
   cp -a "$DESKTOP_TARGET/." "$BACKUP/desktop/"
 fi
+if [[ -d "$SKILL_TARGET" ]]; then
+  mkdir -p "$BACKUP/skill"
+  cp -a "$SKILL_TARGET/." "$BACKUP/skill/"
+fi
 if [[ -d "$LEGACY_DISABLED_TARGET" ]]; then
   mkdir -p "$BACKUP/legacy-disabled-desktop"
   cp -a "$LEGACY_DISABLED_TARGET/." "$BACKUP/legacy-disabled-desktop/"
   rm -rf -- "$LEGACY_DISABLED_TARGET"
 fi
 
-mkdir -p "$BACKEND_TARGET/dist" "$BACKEND_TARGET/web" "$DESKTOP_TARGET"
-rm -rf -- "$BACKEND_TARGET/art"
+mkdir -p "$BACKEND_TARGET/dist" "$BACKEND_TARGET/web" "$DESKTOP_TARGET" "$(dirname "$SKILL_TARGET")"
+rm -rf -- "$BACKEND_TARGET/art" "$SKILL_TARGET"
 mkdir -p "$BACKEND_TARGET/art"
 cp -a "$ROOT/assets/game-art/." "$BACKEND_TARGET/art/"
+cp -a "$ROOT/skills/hermes-game-host-console" "$SKILL_TARGET"
 cp "$ROOT/hermes-plugin/plugin.yaml" "$(dirname "$BACKEND_TARGET")/plugin.yaml"
 cp "$ROOT/hermes-plugin/dashboard/manifest.json" "$BACKEND_TARGET/manifest.json"
 cp "$ROOT/hermes-plugin/dashboard/plugin_api.py" "$BACKEND_TARGET/plugin_api.py"
@@ -41,8 +47,9 @@ cp "$ROOT/desktop-plugin/plugin.js" "$DESKTOP_TARGET/plugin.js"
 hermes plugins enable game-host-console --no-allow-tool-override
 "$ROOT/start.sh"
 
-echo "Installed Game Host Console bridge."
+echo "Installed Game Host Console bridge and Hermes profile-builder skill."
 echo "Backend: $BACKEND_TARGET"
 echo "Desktop: $DESKTOP_TARGET"
+echo "Skill:   $SKILL_TARGET"
 echo "Backup:  $BACKUP"
 echo "Restart the Hermes gateway, then run 'Reload desktop plugins' from the Desktop command palette."

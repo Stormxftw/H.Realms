@@ -1,5 +1,7 @@
 # Adding a New Game Server
 
+> Preferred path: install the console integration and ask Hermes to use the bundled `hermes-game-host-console` skill. It creates ignored local profiles and adapters, researches current server requirements, validates the registry, and asks before downloads or process changes. The manual contract below remains useful for review and troubleshooting.
+
 Three steps, no code changes to `control_engine.py` or `app.py`.
 
 ## Step 1 — Create the server scripts

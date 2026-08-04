@@ -46,15 +46,8 @@ REQUIRED_RELEASE_ARTIFACTS=(
   schemas/game-adapter-config.schema.json
   schemas/game-control-profile.schema.json
   game_profiles/_template.json
-  game_profiles/cs2.json
-  game_profiles/dont-starve-together.json
-  game_profiles/enshrouded.json
   game_profiles/minecraft.json
   game_profiles/palworld.json
-  game_profiles/satisfactory.json
-  game_profiles/sons-of-the-forest.json
-  game_profiles/terraria.json
-  game_profiles/valheim.json
   tests/test_app_api.py
   tests/test_control_engine.py
   tests/test_registry.py
@@ -73,15 +66,9 @@ REQUIRED_RELEASE_ARTIFACTS=(
   scripts/release-check.sh
   scripts/build-profile-catalog.py
   catalog/index.json
-  catalog/packages/cs2.json
-  catalog/packages/dont-starve-together.json
-  catalog/packages/enshrouded.json
   catalog/packages/minecraft.json
   catalog/packages/palworld.json
-  catalog/packages/satisfactory.json
-  catalog/packages/sons-of-the-forest.json
-  catalog/packages/terraria.json
-  catalog/packages/valheim.json
+  skills/hermes-game-host-console/SKILL.md
   CONTRIBUTING.md
   start.sh
   status.sh

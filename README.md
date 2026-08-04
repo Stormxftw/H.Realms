@@ -22,7 +22,7 @@ The design is deliberately conservative: profiles describe intent, backend adapt
 |---|---|
 | Native Hermes Desktop UI | Adds the **Game Host** route, sidebar entry, command-palette action, loading/error states, confirmation dialogs, Store, backups, and diagnostics using the Hermes Plugin SDK. |
 | Standalone local console | Serves the core UI and API at `http://127.0.0.1:5057`. |
-| Nine bundled game profiles | Minecraft, Palworld, Valheim, Counter-Strike 2, Terraria, Don't Starve Together, Satisfactory, Enshrouded, and Sons of the Forest. |
+| Two focused examples | Ships Minecraft and Palworld only—enough to demonstrate property-driven, process-aware, telemetry, backup, and lifecycle patterns without pretending every server should be maintained centrally. |
 | Typed controls | Closed control kinds: `button`, `switch`, `slider`, `select`, `text`, `number`, and `readonly`. |
 | Guarded mutations | One-time plans, actor binding, plan digests, explicit confirmation, per-game serialization, postcondition checks, and audit records. |
 | Durable operations | SQLite-backed queued/running/terminal operation states, polling, interrupted-operation recovery, and truthful `outcome_unknown` handling. |
@@ -67,19 +67,39 @@ flowchart LR
 5. **Remote catalog data is untrusted until proven otherwise.** The service pins the official raw-GitHub path, bounds downloads, validates schemas and semantic bindings, checks exact package size and SHA-256, then stores an atomic verified cache.
 6. **Failures close safely.** A bad or unavailable remote catalog never replaces known-good data; the app retains its verified cache or bundled catalog.
 
-## Supported games
+## Included examples
 
-| Game | Bundled status strategy | Typical lifecycle contract |
+| Game | What the example demonstrates | Typical lifecycle contract |
 |---|---|---|
-| Minecraft Java | Minecraft ping + process/listener probes | `start.sh`, `stop.sh`, backup, selected `server.properties` keys |
-| Palworld | Authenticated local REST + process/listener probes | Start/stop scripts, player count, max players, backup source mapping |
-| Valheim | Steam/process status | Confined start/stop scripts |
-| Counter-Strike 2 | Source A2S + process status | Confined start/stop scripts; operators provide their own GSLT |
-| Terraria | Process/listener status | Confined start/stop scripts |
-| Don't Starve Together | Steam/process status | Confined start/stop scripts; operators provide their own cluster token |
-| Satisfactory | Steam/process status | Confined start/stop scripts |
-| Enshrouded | Steam/process status | Confined start/stop scripts |
-| Sons of the Forest | Steam/process status | Confined start/stop scripts |
+| Minecraft Java | Property-backed controls, Minecraft ping, process/listener probes, backup mapping | `start.sh`, `stop.sh`, `backup.sh`, selected `server.properties` keys |
+| Palworld | Process/listener probes, authenticated local REST telemetry, player counts, backup source mapping | `start.sh`, `stop.sh`, `backup.sh`, local REST configuration |
+
+Minecraft and Palworld are intentionally the only bundled profiles, adapter configurations, and Store packages. They are reference implementations—not the boundary of what the console can manage.
+
+## Create another server with Hermes
+
+Do not wait for this repository to accumulate a brittle museum of half-maintained game configs. The installer includes the [`hermes-game-host-console`](skills/hermes-game-host-console/SKILL.md) skill so your Hermes Agent can build a profile for the server you actually run.
+
+From this repository, start Hermes and ask plainly:
+
+```text
+Use the hermes-game-host-console skill to add a local Valheim dedicated server.
+Research the current server requirements from official sources, show me the plan,
+and ask before downloading software or starting processes.
+```
+
+Hermes will use the shipped examples and schemas to:
+
+1. inspect your projects root and existing server files;
+2. research the dedicated server's real ports, process, configuration, and shutdown behavior;
+3. create ignored machine-local profiles and adapter configuration;
+4. create or adapt narrow lifecycle scripts with your approval;
+5. validate the complete registry and restart the console;
+6. verify the new entry through the Store, controls, and status APIs.
+
+Local customizations live in `data/local-game-profiles/` and `data/local-game-adapters.json`. Both are ignored by Git so machine paths, credentials, and private server details stay out of the repository. Explicit `GAME_HOST_PROFILES_DIR` and `GAME_HOST_ADAPTER_CONFIG` values still take precedence.
+
+If the profile would benefit others, ask Hermes to prepare a sanitized package and pull request using [CONTRIBUTING.md](CONTRIBUTING.md). The public package remains declarative; server binaries, credentials, and executable scripts stay local.
 
 A profile appearing in the Store does **not** mean its server files are bundled. Installing a profile creates a project home and `PROVISION.md`; you still obtain the dedicated-server files from the game publisher and provide your own local scripts and credentials.
 
@@ -147,6 +167,8 @@ contributor package
     → active profile
 ```
 
+The repository ships only the Minecraft and Palworld packages. The Store architecture remains open to reviewed community profiles, but the default experience stays deliberately small.
+
 Contributors edit `catalog/packages/<game-id>.json`. GitHub Actions then verifies:
 
 - exact package envelope and allowed JSON fields;
@@ -192,7 +214,7 @@ curl -fsS http://127.0.0.1:5057/health
 ./install-hermes-plugin.sh
 ```
 
-Then:
+The installer adds the authenticated bridge, Desktop page, local artwork, and the `hermes-game-host-console` skill. Then:
 
 1. Open the Hermes Desktop command palette.
 2. Choose **Reload desktop plugins**.
@@ -218,10 +240,11 @@ Common environment variables:
 |---|---|
 | `DASHBOARD_PORT` | Local service port; defaults to `5057`. |
 | `HERMES_PROJECTS_ROOT` | Root beneath which relative game project directories are confined. |
-| `GAME_HOST_ADAPTER_CONFIG` | Optional machine-local adapter mapping. Keep host-specific absolute paths out of Git. |
+| `GAME_HOST_PROFILES_DIR` | Optional machine-local profile directory; `start.sh` uses ignored `data/local-game-profiles/` when present. |
+| `GAME_HOST_ADAPTER_CONFIG` | Optional machine-local adapter mapping; `start.sh` uses ignored `data/local-game-adapters.json` when present. |
 | `GAME_HOST_STORE_INDEX_URL` | Catalog source override; production code accepts only the approved repository path. |
 
-Use a local, ignored adapter file for machine-specific paths. Public packages should remain portable and relative.
+Use ignored local profile and adapter paths for machine-specific configuration. Public packages should remain portable and relative.
 
 ## Development and verification
 
@@ -279,11 +302,12 @@ diagnostics.py                 bounded redacted diagnostic bundles
 telemetry.py                   game-aware process/player/uptime/RSS probes
 store.py                       installed-game state
 
-game_profiles/                 bundled declarative control profiles
-game_adapters.json             bundled adapter mappings
-schemas/                       strict JSON Schemas
-catalog/packages/               canonical community profile packages
+game_profiles/                  bundled Minecraft + Palworld examples
+game_adapters.json              bundled example adapter mappings
+schemas/                        strict JSON Schemas
+catalog/packages/               canonical reviewed profile packages
 catalog/index.json              deterministic generated catalog
+skills/hermes-game-host-console/ Hermes workflow for local server creation
 
 desktop-plugin/plugin.js       native Hermes Desktop page
 hermes-plugin/plugin_api.py     authenticated local API bridge

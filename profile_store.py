@@ -34,19 +34,7 @@ MAX_PACKAGE_BYTES = 512_000
 _GAME_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 _OFFICIAL_REPOSITORY = "https://github.com/Stormxftw/hermes-game-host-console"
-_BUNDLED_IDS = frozenset(
-    {
-        "minecraft",
-        "palworld",
-        "valheim",
-        "cs2",
-        "terraria",
-        "dont-starve-together",
-        "satisfactory",
-        "enshrouded",
-        "sons-of-the-forest",
-    }
-)
+_BUNDLED_IDS = frozenset({"minecraft", "palworld"})
 _COMMUNITY_SCRIPT_SLOTS = {
     "service.start": ("start.sh",),
     "service.stop": ("stop.sh",),

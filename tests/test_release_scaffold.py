@@ -47,15 +47,8 @@ REQUIRED_RELEASE_ARTIFACTS = (
     "schemas/game-adapter-config.schema.json",
     "schemas/game-control-profile.schema.json",
     "game_profiles/_template.json",
-    "game_profiles/cs2.json",
-    "game_profiles/dont-starve-together.json",
-    "game_profiles/enshrouded.json",
     "game_profiles/minecraft.json",
     "game_profiles/palworld.json",
-    "game_profiles/satisfactory.json",
-    "game_profiles/sons-of-the-forest.json",
-    "game_profiles/terraria.json",
-    "game_profiles/valheim.json",
     "tests/test_app_api.py",
     "tests/test_control_engine.py",
     "tests/test_registry.py",
@@ -75,15 +68,9 @@ REQUIRED_RELEASE_ARTIFACTS = (
     "scripts/release-check.sh",
     "scripts/build-profile-catalog.py",
     "catalog/index.json",
-    "catalog/packages/cs2.json",
-    "catalog/packages/dont-starve-together.json",
-    "catalog/packages/enshrouded.json",
     "catalog/packages/minecraft.json",
     "catalog/packages/palworld.json",
-    "catalog/packages/satisfactory.json",
-    "catalog/packages/sons-of-the-forest.json",
-    "catalog/packages/terraria.json",
-    "catalog/packages/valheim.json",
+    "skills/hermes-game-host-console/SKILL.md",
     "CONTRIBUTING.md",
     "start.sh",
     "status.sh",
@@ -111,22 +98,32 @@ CATEGORY_SENTINELS = {
     "Hermes bridge": "hermes-plugin/plugin.yaml",
     "schemas": "schemas/game-control-profile.schema.json",
     "profiles/template": "game_profiles/_template.json",
-    "profiles/cs2": "game_profiles/cs2.json",
-    "profiles/dont-starve-together": "game_profiles/dont-starve-together.json",
-    "profiles/enshrouded": "game_profiles/enshrouded.json",
     "profiles/minecraft": "game_profiles/minecraft.json",
     "profiles/palworld": "game_profiles/palworld.json",
-    "profiles/satisfactory": "game_profiles/satisfactory.json",
-    "profiles/sons-of-the-forest": "game_profiles/sons-of-the-forest.json",
-    "profiles/terraria": "game_profiles/terraria.json",
-    "profiles/valheim": "game_profiles/valheim.json",
     "official profile catalog": "catalog/index.json",
+    "Hermes profile-builder skill": "skills/hermes-game-host-console/SKILL.md",
     "tests": "tests/ui.test.js",
     "lifecycle scripts": "start.sh",
 }
 
 
 class ReleaseScaffoldTests(unittest.TestCase):
+    def test_shipped_store_and_configuration_examples_are_only_minecraft_and_palworld(self):
+        expected = {"minecraft", "palworld"}
+        profile_ids = {
+            path.stem
+            for path in (ROOT / "game_profiles").glob("*.json")
+            if path.name != "_template.json"
+        }
+        package_ids = {path.stem for path in (ROOT / "catalog" / "packages").glob("*.json")}
+        adapters = json.loads((ROOT / "game_adapters.json").read_text(encoding="utf-8"))
+        catalog = json.loads((ROOT / "catalog" / "index.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(expected, profile_ids)
+        self.assertEqual(expected, package_ids)
+        self.assertEqual(expected, set(adapters["games"]))
+        self.assertEqual(expected, {entry["id"] for entry in catalog["games"]})
+
     def test_pyproject_declares_supported_python_and_only_actual_dependencies(self):
         manifest_path = ROOT / "pyproject.toml"
         self.assertTrue(manifest_path.is_file(), "pyproject.toml must exist")
@@ -207,6 +204,7 @@ class ReleaseScaffoldTests(unittest.TestCase):
             "data/restart-state.json",
             "data/control-audit.jsonl",
             "data/profile-store/packages/example.json",
+            "data/local-game-profiles/example.json",
             "tests/browser/output/results.json",
             "playwright-report/index.html",
             "downloads/game-server.tar.gz",

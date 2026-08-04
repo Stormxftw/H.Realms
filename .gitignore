@@ -25,6 +25,7 @@ data/control-audit.jsonl
 data/installed.json
 data/profile-store/
 data/local-game-adapters.json
+data/local-game-profiles/
 
 # Browser-test output
 /tests/browser/output/

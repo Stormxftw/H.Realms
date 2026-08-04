@@ -10,8 +10,12 @@ cd "$ROOT"
 mkdir -p logs data
 
 LOCAL_ADAPTER_CONFIG="$ROOT/data/local-game-adapters.json"
+LOCAL_PROFILE_DIR="$ROOT/data/local-game-profiles"
 if [[ -z "${GAME_HOST_ADAPTER_CONFIG:-}" && -f "$LOCAL_ADAPTER_CONFIG" ]]; then
   export GAME_HOST_ADAPTER_CONFIG="$LOCAL_ADAPTER_CONFIG"
+fi
+if [[ -z "${GAME_HOST_PROFILES_DIR:-}" && -d "$LOCAL_PROFILE_DIR" ]]; then
+  export GAME_HOST_PROFILES_DIR="$LOCAL_PROFILE_DIR"
 fi
 
 if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then

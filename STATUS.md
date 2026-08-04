@@ -32,8 +32,8 @@
 
 ## What works
 
-- Live local console with **9 supported game profiles** (Minecraft, Palworld, Valheim, CS2, Terraria, Don't Starve Together, Satisfactory, Enshrouded, Sons of the Forest)
-- **Installed vs Store model** — the sidebar shows only games you have *installed*; the rest live in the **Store** until you add them (from the Store UI or via the Hermes `game-host-console` skill). Seeded on first run from what is present/running.
+- Live local console with **2 bundled examples**: Minecraft and Palworld
+- **Installed vs Store model** — the sidebar shows installed servers; Minecraft and Palworld provide the shipped Store/config examples, while Hermes can generate ignored machine-local profiles and adapters for other servers using the bundled `hermes-game-host-console` skill.
 - **Accurate live status** — a running process whose listeners are listening reports `RUNNING`, even if setup blockers are pending (setup gates *mutations*, not runtime health)
 - **Player counts** — Minecraft, Source (A2S) and Palworld REST show live `players`; Palworld reads its authenticated REST API (`RESTAPIEnabled=True` on 8212), resolving the AdminPassword + ServerPlayerMaxNum from `PalWorldSettings.ini` via `/proc/<pid>/cwd`
 - **Process uptime and memory** — Linux collectors read `/proc/<pid>/stat`, `/proc/uptime`, and `VmRSS` from `/proc/<pid>/status`; metrics fail soft if the process exits or procfs becomes unreadable
@@ -144,26 +144,19 @@ The old hardcoded `_commands_for()` dict is gone. `game_adapters.json` now maps:
 - Adapter config maps to approved scripts only — no arbitrary shell from profiles
 - Do **not** expose port `5057` on the LAN while mutation endpoints are enabled
 
-## Active game servers on this host
+## Active example servers on this host
 
 | Game | Status | Scripts exist? |
 |---|---|---|
-| Minecraft | Running | Yes (minecraft-server/) |
-| Palworld | Running | Yes (palworld-server-local/) |
-| Valheim | Not installed | Needs start.sh/stop.sh + SteamCMD download |
-| CS2 | Not installed | Needs GSLT token + start.sh/stop.sh |
-| Terraria | Not installed | Needs binary + world file |
-| DST | Not installed | Needs cluster token + start.sh/stop.sh |
-| Satisfactory | Not installed | Needs SteamCMD download + start.sh/stop.sh |
-| Enshrouded | Not installed | Needs SteamCMD download + start.sh/stop.sh |
-| SotF | Not installed | Needs SteamCMD download + start.sh/stop.sh |
+| Minecraft | Running | Yes (`minecraft-server/`) |
+| Palworld | Running | Yes (`palworld-server-local/`) |
 
-## How to add a game server for real
+## How to add another server
 
-1. **Create the server directory**: `~/Projects/<game>-server/`
-2. **Write start.sh and stop.sh** — see `docs/ADDING_A_GAME.md` for patterns
-3. **Download the server files** — via SteamCMD or direct download
-4. **The profile + adapter are already done** — the new game appears in the console immediately
+1. Run Hermes from the repository checkout.
+2. Ask it to use the bundled `hermes-game-host-console` skill for the requested dedicated server.
+3. Review the researched plan and approve downloads or process-changing actions separately.
+4. Hermes creates ignored local profile/adapter configuration, validates it, and verifies the console after restart.
 
 ## Test verification (`2026-07-30`)
 

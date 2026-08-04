@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 BACKEND_TARGET="$HERMES_HOME/plugins/game-host-console"
 DESKTOP_TARGET="$HERMES_HOME/desktop-plugins/game-host-console"
+SKILL_TARGET="$HERMES_HOME/skills/gaming/hermes-game-host-console"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="$ROOT/.uninstall-backups/$STAMP"
 
@@ -15,9 +16,12 @@ fi
 if [[ -d "$DESKTOP_TARGET" ]]; then
   cp -a "$DESKTOP_TARGET" "$BACKUP/desktop"
 fi
+if [[ -d "$SKILL_TARGET" ]]; then
+  cp -a "$SKILL_TARGET" "$BACKUP/skill"
+fi
 
 hermes plugins disable game-host-console 2>/dev/null || true
-rm -rf "$BACKEND_TARGET" "$DESKTOP_TARGET"
+rm -rf "$BACKEND_TARGET" "$DESKTOP_TARGET" "$SKILL_TARGET"
 
 if [[ "${1:-}" == "--stop-service" ]]; then
   "$ROOT/stop.sh"

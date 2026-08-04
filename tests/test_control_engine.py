@@ -73,18 +73,7 @@ class ControlEngineCatalogTests(unittest.TestCase):
             catalog = engine.catalog()
 
             game_ids = {game["id"] for game in catalog["games"]}
-            self.assertTrue({"minecraft", "palworld"}.issubset(game_ids))
-            self.assertTrue(
-                {
-                    "valheim",
-                    "cs2",
-                    "terraria",
-                    "dont-starve-together",
-                    "satisfactory",
-                    "enshrouded",
-                    "sons-of-the-forest",
-                }.issubset(game_ids)
-            )
+            self.assertEqual({"minecraft", "palworld"}, game_ids)
         self.assertFalse(audit_path.exists())
         self.assertFalse((repository_root / "tests" / "operations.db").exists())
 
