@@ -197,6 +197,7 @@ function operationSucceeded(operation) {
 /** @typedef {{ artifactId: string, filename?: string, sizeBytes?: number, validation?: { state?: string, entryCount?: number } }} BackupArtifact */
 /** @typedef {{ previewId: string, artifactId: string, archiveEntries?: string[], requiredConfirmation: string }} RestorePreview */
 /** @typedef {{ state?: string, logId?: string, content?: string }} DiagnosticTail */
+/** @typedef {{ gameId: string, mediaType: string, dataUrl: string, objectPosition?: string, attribution?: string, licenseSpdx?: string }} GameArt */
 /** @typedef {{ gameId: string, artifactId: string, serverState: string }} RestorePreviewRequest */
 /** @typedef {{ gameId: string, previewId: string, confirmation: string, serverState: string }} RestoreExecuteRequest */
 
@@ -291,7 +292,13 @@ function valueLabel(value, unit) {
 /** @param {{ label: string, value: ControlValue }} props */
 function Stat({ label, value }) {
   return jsx('div', {
-    style: { ...panelStyle, padding: '12px' },
+    style: {
+      ...panelStyle,
+      backdropFilter: 'blur(6px)',
+      backgroundColor: 'var(--ui-bg-editor)',
+      background: 'color-mix(in srgb, var(--ui-bg-editor) 88%, transparent)',
+      padding: '12px',
+    },
     children: [
       jsx('div', { className: 'text-xs text-muted-foreground', children: label }, 'label'),
       jsx('div', { className: 'mt-1 truncate text-sm font-semibold', title: String(value), children: value }, 'value'),
@@ -549,6 +556,13 @@ function createGameHostPage(ctx, runtime) {
       ),
       refetchInterval: 30_000,
       retry: 1,
+    })
+    const artQuery = useQuery({
+      queryKey: [ctx.source, 'art', selectedGameId],
+      queryFn: () => /** @type {Promise<GameArt>} */ (ctx.rest(`/art/${selectedGameId}`)),
+      enabled: !!selectedGameId,
+      retry: false,
+      staleTime: Infinity,
     })
 
     const backupsQuery = useQuery({
@@ -1030,12 +1044,45 @@ function createGameHostPage(ctx, runtime) {
         style: { margin: '0 auto', maxWidth: '1180px', padding: narrow ? '16px' : '24px' },
         children: [
           jsx('section', {
-            style: { ...panelStyle, padding: narrow ? '16px' : '20px' },
+            style: {
+              ...panelStyle,
+              overflow: 'hidden',
+              padding: narrow ? '16px' : '20px',
+              position: 'relative',
+            },
             children: [
+              artQuery.data?.dataUrl ? jsx('img', {
+                alt: '',
+                'aria-hidden': true,
+                loading: 'eager',
+                src: artQuery.data.dataUrl,
+                style: {
+                  height: '100%',
+                  inset: 0,
+                  objectFit: 'cover',
+                  objectPosition: artQuery.data?.objectPosition || '50% 50%',
+                  opacity: narrow ? 0.4 : 0.78,
+                  pointerEvents: 'none',
+                  position: 'absolute',
+                  width: '100%',
+                },
+              }, 'art') : null,
+              artQuery.data?.dataUrl ? jsx('div', {
+                'aria-hidden': true,
+                style: {
+                  backgroundColor: 'var(--ui-bg-editor)',
+                  background: 'linear-gradient(90deg, color-mix(in srgb, var(--ui-bg-editor) 96%, transparent) 0%, color-mix(in srgb, var(--ui-bg-editor) 82%, transparent) 48%, color-mix(in srgb, var(--ui-bg-editor) 34%, transparent) 100%)',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  position: 'absolute',
+                },
+              }, 'scrim') : null,
               jsx('div', {
                 className: 'flex flex-wrap items-start justify-between gap-4',
+                style: { position: 'relative', zIndex: 1 },
                 children: [
                   jsx('div', {
+                    style: { flex: '1 1 560px', minWidth: 0 },
                     children: [
                       jsx('div', {
                         className: 'flex items-center gap-2',
@@ -1047,11 +1094,21 @@ function createGameHostPage(ctx, runtime) {
                       jsx('h1', { className: 'mt-3 text-2xl font-semibold tracking-tight', children: game.name }, 'name'),
                       jsx('p', { className: 'mt-2 max-w-2xl text-sm leading-6 text-muted-foreground', children: game.description || 'Game-specific controls managed by Hermes.' }, 'description'),
                       presentation.reasons.length ? jsx('div', {
-                        className: 'mt-3 grid gap-1 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-5 text-amber-500',
+                        className: 'mt-3 grid gap-1 rounded-md border border-amber-500/30 p-3 text-xs leading-5 text-amber-500',
+                        style: {
+                          backdropFilter: 'blur(6px)',
+                          backgroundColor: 'var(--ui-bg-editor)',
+                          background: 'color-mix(in srgb, var(--ui-bg-editor) 94%, transparent)',
+                        },
                         children: presentation.reasons.map((reason, index) => jsx('p', { children: reason }, `${index}-${reason}`)),
                       }, 'status-reasons') : null,
                       game.hints && game.hints.length ? jsx('div', {
-                        className: 'mt-3 grid gap-1 rounded-md border border-neutral-500/20 bg-neutral-500/5 p-3 text-xs leading-5 text-muted-foreground',
+                        className: 'mt-3 grid gap-1 rounded-md border border-neutral-500/20 p-3 text-xs leading-5 text-muted-foreground',
+                        style: {
+                          backdropFilter: 'blur(6px)',
+                          backgroundColor: 'var(--ui-bg-editor)',
+                          background: 'color-mix(in srgb, var(--ui-bg-editor) 94%, transparent)',
+                        },
                         children: [
                           jsx('p', { className: 'font-medium', children: 'Setup hints' }, 'title'),
                           ...game.hints.map((hint, index) => jsx('p', { children: hint.message }, `hint-${index}`)),
@@ -1062,6 +1119,7 @@ function createGameHostPage(ctx, runtime) {
                   jsx(Button, {
                     disabled: statusQuery.isFetching || catalogQuery.isFetching,
                     onClick: () => refreshAll(true),
+                    style: { backgroundColor: 'var(--ui-bg-editor)', flexShrink: 0 },
                     variant: 'secondary',
                     children: statusQuery.isFetching || catalogQuery.isFetching
                       ? [jsx(GlyphSpinner, {}, 'spin'), ' Refreshing']
@@ -1071,7 +1129,11 @@ function createGameHostPage(ctx, runtime) {
               }, 'header'),
               jsx('div', {
                 className: 'mt-5 grid gap-3',
-                style: { gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))' },
+                style: {
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                  position: 'relative',
+                  zIndex: 1,
+                },
                 children: [
                   jsx(Stat, { label: 'Connect', value: connect.lan || connect.local || connect.public || 'Unavailable' }, 'connect'),
                   jsx(Stat, { label: 'Uptime', value: process.uptimeHuman || '—' }, 'uptime'),

@@ -75,6 +75,26 @@ class PluginApiTests(unittest.TestCase):
         self.assertIn('/api/plugins/game-host-console/assets/app.css', result)
         self.assertIn('/api/plugins/game-host-console/assets/app.js', result)
 
+    def test_repo_packaged_art_is_served_as_verified_local_data(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+
+        response = module.game_art("palworld")
+        payload = json.loads(response.body)
+        self.assertEqual("palworld", payload["gameId"])
+        self.assertEqual("image/webp", payload["mediaType"])
+        self.assertEqual("50% 50%", payload["objectPosition"])
+        self.assertTrue(payload["dataUrl"].startswith("data:image/webp;base64,"))
+        self.assertNotIn("http", payload["dataUrl"])
+        self.assertLessEqual(len(response.body), module.MAX_ART_RESPONSE)
+
+        for unsupported in ("unknown", "../palworld", "PALWORLD"):
+            with self.subTest(game_id=unsupported):
+                with self.assertRaises(module.HTTPException) as rejected:
+                    module.game_art(unsupported)
+                self.assertEqual(404, rejected.exception.status_code)
+
     def test_proxy_rejects_unapproved_methods_and_paths_before_upstream(self):
         module = load_plugin_api()
         if module is None:

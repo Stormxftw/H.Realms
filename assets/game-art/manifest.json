@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "gameId": "palworld",
+      "role": "top-hero",
+      "file": "palworld/hero.webp",
+      "mediaType": "image/webp",
+      "width": 1600,
+      "height": 517,
+      "sizeBytes": 76430,
+      "sha256": "27a940d89a2109b966e659b91dbc9f82eb55a6be3ab46e70674249e759c5fe7d",
+      "sourceKind": "generated-original",
+      "licenseSpdx": "CC0-1.0",
+      "repoPackagingRecommendation": "allow",
+      "attribution": "Original Hermes Game Host Console project artwork",
+      "objectPosition": "50% 50%",
+      "textSafeArea": "left 44%",
+      "nonEndorsement": "Assigned through surrounding factual UI text; not affiliated with or endorsed by Pocketpair."
+    }
+  ]
+}

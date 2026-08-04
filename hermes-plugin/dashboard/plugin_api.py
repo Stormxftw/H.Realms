@@ -6,7 +6,10 @@ inside Hermes Desktop and proxies only an explicit set of typed local endpoints.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -17,7 +20,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 router = APIRouter()
@@ -26,9 +29,20 @@ _LOG = logging.getLogger("hermes-plugin.game-host-console")
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
+ART_DIR = next(
+    (
+        candidate
+        for candidate in (ROOT / "art", ROOT.parents[1] / "assets" / "game-art")
+        if (candidate / "manifest.json").is_file()
+    ),
+    ROOT / "art",
+)
 PLUGIN_BASE = "/api/plugins/game-host-console"
 MAX_BODY = 65_536
 MAX_RESPONSE = 1_048_576
+MAX_ART_BYTES = 512_000
+MAX_ART_RESPONSE = 768_000
+MAX_ART_MANIFEST_BYTES = 65_536
 
 
 class ProxyRule(NamedTuple):
@@ -121,6 +135,63 @@ def _read_web(name: str) -> bytes:
     if not path.is_file():
         raise HTTPException(status_code=503, detail=f"Game Host Console asset is not installed: {name}")
     return path.read_bytes()
+
+
+def _game_art_entry(game_id: str) -> dict[str, object]:
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", game_id) is None:
+        raise HTTPException(status_code=404, detail="Game artwork is unavailable")
+    manifest_path = ART_DIR / "manifest.json"
+    try:
+        if manifest_path.stat().st_size > MAX_ART_MANIFEST_BYTES:
+            raise ValueError("art manifest exceeds safety limit")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assets = manifest.get("assets")
+        if manifest.get("schemaVersion") != 1 or not isinstance(assets, list):
+            raise ValueError("invalid art manifest")
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        _LOG.exception("packaged game-art manifest is unavailable or invalid: %s", exc)
+        raise HTTPException(status_code=503, detail="Packaged game artwork is unavailable") from exc
+
+    entry = next(
+        (item for item in assets if isinstance(item, dict) and item.get("gameId") == game_id),
+        None,
+    )
+    if entry is None or entry.get("repoPackagingRecommendation") != "allow":
+        raise HTTPException(status_code=404, detail="Game artwork is unavailable")
+    return entry
+
+
+def _read_game_art(entry: dict[str, object]) -> bytes:
+    relative_name = entry.get("file")
+    if not isinstance(relative_name, str):
+        raise HTTPException(status_code=503, detail="Packaged game artwork is invalid")
+    relative_path = Path(relative_name)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise HTTPException(status_code=503, detail="Packaged game artwork is invalid")
+    try:
+        root = ART_DIR.resolve(strict=True)
+        path = (root / relative_path).resolve(strict=True)
+        path.relative_to(root)
+        size = path.stat().st_size
+        expected_size = entry.get("sizeBytes")
+        expected_digest = entry.get("sha256")
+        if (
+            not isinstance(expected_size, int)
+            or size != expected_size
+            or size > MAX_ART_BYTES
+            or entry.get("mediaType") != "image/webp"
+            or not isinstance(expected_digest, str)
+        ):
+            raise ValueError("packaged art metadata mismatch")
+        content = path.read_bytes()
+        if content[:4] != b"RIFF" or content[8:12] != b"WEBP":
+            raise ValueError("packaged art is not WebP")
+        if hashlib.sha256(content).hexdigest() != expected_digest:
+            raise ValueError("packaged art digest mismatch")
+        return content
+    except (OSError, ValueError) as exc:
+        _LOG.exception("packaged game-art file failed validation: %s", exc)
+        raise HTTPException(status_code=503, detail="Packaged game artwork is invalid") from exc
 
 
 def _proxy_rule(method: str, path: str) -> ProxyRule:
@@ -236,6 +307,26 @@ def _proxy(
             status_code=503,
             detail="Local Game Host Console is unavailable.",
         ) from exc
+
+
+@router.get("/art/{game_id}", response_class=JSONResponse)
+def game_art(game_id: str) -> JSONResponse:
+    entry = _game_art_entry(game_id)
+    content = _read_game_art(entry)
+    response = JSONResponse(
+        {
+            "gameId": game_id,
+            "mediaType": "image/webp",
+            "dataUrl": "data:image/webp;base64," + base64.b64encode(content).decode("ascii"),
+            "objectPosition": entry.get("objectPosition", "50% 50%"),
+            "attribution": entry.get("attribution", "Packaged game artwork"),
+            "licenseSpdx": entry.get("licenseSpdx"),
+        },
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+    if len(response.body) > MAX_ART_RESPONSE:
+        raise HTTPException(status_code=503, detail="Packaged game artwork exceeded safety limit")
+    return response
 
 
 @router.get("/app", response_class=HTMLResponse)
