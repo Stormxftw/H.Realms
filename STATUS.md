@@ -1,7 +1,7 @@
 # Hermes Game Host Console Status
 
 - Status: **Working MVP — Installed/Store model + accurate live status**
-- Latest verification: `2026-08-02 EDT`
+- Latest verification: `2026-08-03 EDT` — health check: backend under systemd, full suite green (167 passed, 184 subtests)
 - Product/add-on name: `Hermes Game Host Console`
 - Version: backend `HermesGameHostConsole/0.4`, plugin `0.3.0`
 - Port: `5057` (loopback only by default)

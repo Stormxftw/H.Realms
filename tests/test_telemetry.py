@@ -3,6 +3,7 @@ import socket
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 import telemetry
 
@@ -429,6 +430,192 @@ class TelemetryTests(unittest.TestCase):
         )
         self.assertEqual("running_ready", result_with_rest["state"])
         self.assertEqual({"online": 7, "max": 32}, result_with_rest["players"])
+
+
+class PalWorldRestAuthTests(unittest.TestCase):
+    """REST with AdminPassword: Basic auth + /v1/api/players enrichment."""
+
+    @staticmethod
+    def _fake_response(payload: bytes):
+        import io
+
+        class FakeResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        return FakeResponse(payload)
+
+    def _routing_opener(self, responses: dict[str, bytes], calls: list):
+        def opener(request, timeout=None):
+            url = (
+                request.get_full_url()
+                if hasattr(request, "get_full_url")
+                else str(request)
+            )
+            calls.append(request)
+            for suffix, payload in responses.items():
+                if url.endswith(suffix):
+                    return self._fake_response(payload)
+            raise OSError(f"unexpected url {url}")
+
+        return opener
+
+    def test_probe_sends_basic_auth_and_merges_players_list(self):
+        import base64
+
+        calls: list = []
+        opener = self._routing_opener(
+            {
+                "/v1/api/info": b'{"version": "v1", "servername": "Strugglebus"}',
+                "/v1/api/players": b'{"players": [{"playerId": "a"}, {"playerId": "b"}]}',
+            },
+            calls,
+        )
+        result = telemetry.probe_palworld_rest(
+            port=8212, password="hunter2", max_players=32, opener=opener
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(2, result["data"]["players"])
+        self.assertEqual(32, result["data"]["server_max_players"])
+        header = calls[0].get_header("Authorization")
+        self.assertIsNotNone(header)
+        decoded = base64.b64decode(header.split(" ", 1)[1]).decode()
+        self.assertEqual("admin:hunter2", decoded)
+
+    def test_probe_without_password_sends_no_auth_header(self):
+        calls: list = []
+        opener = self._routing_opener(
+            {"/v1/api/info": b'{"servername": "s"}'}, calls
+        )
+        result = telemetry.probe_palworld_rest(port=8212, opener=opener)
+        self.assertTrue(result["ok"])
+        self.assertIsNone(calls[0].get_header("Authorization"))
+
+    def test_players_fetch_failure_keeps_info_document(self):
+        calls: list = []
+        opener = self._routing_opener(
+            {"/v1/api/info": b'{"servername": "s"}'}, calls
+        )  # players URL raises OSError
+        result = telemetry.probe_palworld_rest(
+            port=8212, password="pw", opener=opener
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual("s", result["data"]["servername"])
+        self.assertNotIn("players", result["data"])
+
+    def test_probe_401_without_password_is_not_a_crash(self):
+        import urllib.error
+
+        def opener(request, timeout=None):
+            raise urllib.error.HTTPError(
+                request.get_full_url(), 401, "Unauthorized", None, None
+            )
+
+        result = telemetry.probe_palworld_rest(port=8212, opener=opener)
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["data"])
+
+    def test_parse_palworld_settings_extracts_password_and_max(self):
+        raw = (
+            "OptionSettings=(Difficulty=None,AdminPassword=SuperSecret20,"
+            "ServerPlayerMaxNum=32,bIsMultiplay=False)"
+        )
+        parsed = telemetry.parse_palworld_settings(raw)
+        self.assertEqual("SuperSecret20", parsed["admin_password"])
+        self.assertEqual(32, parsed["max_players"])
+
+    def test_parse_palworld_settings_quoted_password(self):
+        raw = 'OptionSettings=(AdminPassword="quoted pass",ServerPlayerMaxNum=8)'
+        parsed = telemetry.parse_palworld_settings(raw)
+        self.assertEqual("quoted pass", parsed["admin_password"])
+
+    def test_parse_palworld_settings_missing_keys(self):
+        parsed = telemetry.parse_palworld_settings("OptionSettings=(Nothing=1)")
+        self.assertIsNone(parsed["admin_password"])
+        self.assertIsNone(parsed["max_players"])
+
+    def test_read_palworld_settings_unknown_pid_is_empty_not_raising(self):
+        result = telemetry.read_palworld_settings(None)
+        self.assertEqual({"admin_password": None, "max_players": None}, result)
+        result = telemetry.read_palworld_settings(99999999)
+        self.assertEqual({"admin_password": None, "max_players": None}, result)
+
+    def test_read_palworld_settings_walks_up_from_subdirectory_cwd(self):
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ini_dir = root / "Pal" / "Saved" / "Config" / "LinuxServer"
+            ini_dir.mkdir(parents=True)
+            (ini_dir / "PalWorldSettings.ini").write_text(
+                "OptionSettings=(AdminPassword=nestedpw,ServerPlayerMaxNum=16)",
+                encoding="utf-8",
+            )
+            deep = root / "Pal" / "Binaries" / "Linux"
+            deep.mkdir(parents=True)
+            fake_cwd = root / "Pal" / "Binaries" / "Linux"
+            with mock.patch(
+                "pathlib.Path.resolve",
+                side_effect=lambda **_kw: fake_cwd,
+            ):
+                result = telemetry.read_palworld_settings(4242)
+            self.assertEqual("nestedpw", result["admin_password"])
+            self.assertEqual(16, result["max_players"])
+
+    def test_collect_game_passes_settings_to_palworld_probe(self):
+        captured: dict[str, Any] = {}
+
+        def probe(**kwargs):
+            captured.update(kwargs)
+            return {
+                "attempted": True,
+                "ok": True,
+                "errorCode": None,
+                "error": None,
+                "data": {"players": 1, "server_max_players": 32},
+            }
+
+        result = telemetry.collect_game(
+            game_id="palworld",
+            name="Palworld",
+            adapter={
+                "statusCollector": "palworld_rest",
+                "processSearch": "PalServer-Linux-Shipping",
+                "defaultPort": 8211,
+                "portProtocol": "udp",
+                "restPort": 8212,
+                "additionalPorts": [
+                    {"name": "query", "port": 27015, "protocol": "udp"}
+                ],
+            },
+            readiness={"readiness": "ready", "projectPresent": True},
+            process_probe=lambda _n: {
+                "ok": True,
+                "running": True,
+                "pid": 4242,
+                "error": None,
+            },
+            listener_probe=lambda port, protocol: {
+                "port": port,
+                "protocol": protocol,
+                "ok": True,
+                "listening": True,
+                "error": None,
+            },
+            palworld_rest_probe=probe,
+            palworld_settings_reader=lambda _pid: {
+                "admin_password": "pw-from-ini",
+                "max_players": 32,
+            },
+        )
+        self.assertEqual("pw-from-ini", captured.get("password"))
+        self.assertEqual(32, captured.get("max_players"))
+        self.assertEqual({"online": 1, "max": 32}, result["players"])
+        self.assertTrue(result["online"])
 
 
 if __name__ == "__main__":

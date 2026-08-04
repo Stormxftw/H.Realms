@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
+import re
 import socket
 import struct
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -370,23 +373,85 @@ def probe_a2s(
             udp_socket.close()
 
 
+def parse_palworld_settings(raw: str) -> dict[str, Any]:
+    """Extract the admin password and player cap from PalWorldSettings.ini text.
+
+    Only the two keys the console needs are parsed; the full file is never
+    echoed. ``AdminPassword`` may be quoted; ``ServerPlayerMaxNum`` is the
+    authoritative maximum slot count (REST info does not report it).
+    """
+    admin_password: str | None = None
+    max_players: int | None = None
+    match = re.search(r'AdminPassword=(?:"([^"]*)"|([^,)]*))', raw)
+    if match:
+        value = (match.group(1) or match.group(2) or "").strip()
+        admin_password = value or None
+    match = re.search(r"ServerPlayerMaxNum=(\d+)", raw)
+    if match:
+        max_players = int(match.group(1))
+    return {"admin_password": admin_password, "max_players": max_players}
+
+
+def read_palworld_settings(pid: int | None) -> dict[str, Any]:
+    """Read PalWorldSettings.ini for a running server, resolved via /proc/<pid>/cwd.
+
+    The process cwd is the server root or a subdirectory of it (the shipping
+    binary runs from ``Pal/Binaries/Linux``), so walk up from the cwd until
+    ``Pal/Saved/Config/LinuxServer/PalWorldSettings.ini`` is found. Any
+    failure degrades to empty values (no auth probe) rather than raising —
+    the REST enrichment is optional and must never affect reported health.
+    """
+    empty = {"admin_password": None, "max_players": None}
+    if not pid:
+        return dict(empty)
+    try:
+        cwd = Path(f"/proc/{int(pid)}/cwd").resolve(strict=True)
+    except (OSError, ValueError):
+        return dict(empty)
+    relative = Path("Pal") / "Saved" / "Config" / "LinuxServer" / "PalWorldSettings.ini"
+    try:
+        for ancestor in (cwd, *cwd.parents):
+            candidate = ancestor / relative
+            if candidate.is_file():
+                with candidate.open("r", encoding="utf-8", errors="replace") as handle:
+                    raw = handle.read(1_048_576)
+                return parse_palworld_settings(raw)
+    except OSError:
+        return dict(empty)
+    return dict(empty)
+
+
 def probe_palworld_rest(
     *,
     port: int,
     host: str = "127.0.0.1",
     timeout: float = 3.0,
+    password: str | None = None,
+    max_players: int | None = None,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
     """Probe the Palworld REST /v1/api/info endpoint when it is enabled.
 
     Palworld's dedicated server exposes a small HTTP API on RESTAPIPort for live
-    info and player listings. If REST is not enabled (or the endpoint is unreachable)
-    this fails softly so the running server is not reported as degraded on account of
-    an optional statistics endpoint. Player counts are a best-effort enrichment.
+    info and player listings. When ``password`` is supplied (AdminPassword from
+    PalWorldSettings.ini) the request carries Basic auth — required once
+    RESTAPIEnabled=True, which makes every endpoint 401 without credentials.
+    The online count comes from /v1/api/players (a list of player records);
+    ``max_players`` comes from ServerPlayerMaxNum because the API never reports
+    it. If REST is not enabled (or any endpoint is unreachable) this fails
+    softly so the running server is not reported as degraded on account of an
+    optional statistics endpoint. Player counts are a best-effort enrichment.
     """
-    url = f"http://{host}:{port}/v1/api/info"
-    try:
-        with opener(url, timeout=timeout) as response:
+
+    def _request(path: str) -> Any:
+        headers: dict[str, str] = {}
+        if password:
+            credentials = base64.b64encode(f"admin:{password}".encode()).decode()
+            headers["Authorization"] = f"Basic {credentials}"
+        return urllib.request.Request(f"http://{host}:{port}{path}", headers=headers)
+
+    def _fetch(request: Any) -> bytes:
+        with opener(request, timeout=timeout) as response:
             body = bytearray()
             while True:
                 chunk = response.read(65_536)
@@ -395,15 +460,40 @@ def probe_palworld_rest(
                 if len(body) + len(chunk) > 1_000_000:
                     break
                 body.extend(chunk)
-        document = json.loads(bytes(body).decode("utf-8", errors="replace"))
+        return bytes(body)
+
+    try:
+        document = json.loads(_fetch(_request("/v1/api/info")).decode("utf-8", errors="replace"))
         if not isinstance(document, dict):
             raise ValueError("Palworld info is not an object")
+        # Best-effort player enrichment: the count lives on a second endpoint.
+        # A failure here keeps the info document — the server is still fine.
+        try:
+            players_doc = json.loads(
+                _fetch(_request("/v1/api/players")).decode("utf-8", errors="replace")
+            )
+            players_list = players_doc.get("players") if isinstance(players_doc, dict) else None
+            if isinstance(players_list, list):
+                document["players"] = len(players_list)
+                if isinstance(max_players, int):
+                    document["server_max_players"] = max_players
+        except Exception:
+            pass
         return {
             "attempted": True,
             "ok": True,
             "errorCode": None,
             "error": None,
             "data": document,
+        }
+    except urllib.error.HTTPError as exc:
+        code = "unauthorized" if exc.code in (401, 403) else "http_error"
+        return {
+            "attempted": True,
+            "ok": False,
+            "errorCode": code,
+            "error": f"HTTP {exc.code}",
+            "data": None,
         }
     except (socket.timeout, TimeoutError) as exc:
         return {
@@ -518,6 +608,7 @@ def collect_game(
     minecraft_probe: Callable[..., dict[str, Any]] = probe_minecraft,
     a2s_probe: Callable[..., dict[str, Any]] = probe_a2s,
     palworld_rest_probe: Callable[..., dict[str, Any]] = probe_palworld_rest,
+    palworld_settings_reader: Callable[[int | None], dict[str, Any]] = read_palworld_settings,
     lan_address: str | None = None,
 ) -> dict[str, Any]:
     """Collect independent process, listener, and protocol-query evidence."""
@@ -553,7 +644,13 @@ def collect_game(
         elif collector == "steam_query":
             query = a2s_probe(port=query_port, host="127.0.0.1")
         elif collector == "palworld_rest":
-            query = palworld_rest_probe(port=query_port, host="127.0.0.1")
+            settings = palworld_settings_reader(process.get("pid"))
+            query = palworld_rest_probe(
+                port=query_port,
+                host="127.0.0.1",
+                password=settings.get("admin_password"),
+                max_players=settings.get("max_players"),
+            )
 
     # Optional statistics collectors (Palworld REST) must never mark a healthy
     # running server degraded just because an auxiliary endpoint is disabled.
