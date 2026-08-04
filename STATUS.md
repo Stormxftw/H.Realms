@@ -4,7 +4,7 @@
 - Latest verification: `2026-08-03 EDT` — Palworld remained `running_ready`; Desktop rendered the live verified backup and approved diagnostics logs; process telemetry now reports uptime and RSS memory; full suite green (**193 passed, 202 subtests**).
 
 ## UI Wiring (August 2026 update)
-- Desktop plugin surfaces **Backups** (list, create, preview restore, execute with exact token confirmation) and **Diagnostics** (log list, redacted tail, bundle).
+- Desktop plugin surfaces **Backups** (list, create, preview restore, execute with exact token confirmation) and **Diagnostics** (log list, inline redacted tail with loading/error/binary states, bundle).
 - Root loader failure fixed: the Desktop plugin is once again a single-file ESM module with no unresolved relative imports.
 - Root bridge failure fixed: the authenticated proxy narrowly allows the typed backup/restore/diagnostics routes, bounded bodies/responses, and only `redact=true|false` on concrete log-tail routes.
 - The installer now backs up and removes the legacy `game-host-console.disabled` directory from the live scan root; renaming a plugin directory inside `desktop-plugins/` does not disable it.

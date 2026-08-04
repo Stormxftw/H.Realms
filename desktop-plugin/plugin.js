@@ -461,6 +461,55 @@ function ControlCard({ control, gameId, online, value, onValue, onPreview, onRef
 }
 
 /**
+ * @param {{ tail: DiagnosticTail, onClose: () => void }} props
+ */
+function DiagnosticTailPanel({ tail, onClose }) {
+  const loading = tail.state === 'loading'
+  const stateLabel = loading ? 'Loading' : String(tail.state || 'unknown').replaceAll('_', ' ')
+  const emptyMessage = tail.state === 'binary'
+    ? 'This log is not readable text (binary content).'
+    : tail.state === 'error'
+      ? 'The redacted log tail could not be loaded.'
+      : `No readable text (${tail.state || 'unknown'}).`
+
+  return jsx('div', {
+    'aria-live': 'polite',
+    className: 'grid gap-3 p-3',
+    style: { ...panelStyle, background: 'var(--ui-bg-secondary)' },
+    children: [
+      jsx('div', {
+        className: 'flex items-center justify-between gap-3',
+        children: [
+          jsx('div', {
+            className: 'min-w-0',
+            children: [
+              jsx('div', { className: 'truncate text-xs font-semibold', children: `Log tail · ${tail.logId || 'unknown'}` }, 'title'),
+              jsx('div', { className: 'mt-1 text-xs text-muted-foreground', children: 'Redacted output from the selected approved log.' }, 'description'),
+            ],
+          }, 'copy'),
+          jsx('div', {
+            className: 'flex items-center gap-2',
+            children: [
+              jsx(Badge, { variant: loading ? 'muted' : tail.state === 'ok' ? 'default' : 'warn', children: stateLabel }, 'state'),
+              jsx(Button, { disabled: loading, onClick: onClose, size: 'sm', variant: 'ghost', children: 'Close' }, 'close'),
+            ],
+          }, 'actions'),
+        ],
+      }, 'header'),
+      loading
+        ? jsx('div', { className: 'flex items-center gap-2 text-xs text-muted-foreground', children: [jsx(GlyphSpinner, {}, 'spinner'), ' Loading redacted tail…'] }, 'loading')
+        : tail.content
+          ? jsx('pre', {
+              className: 'whitespace-pre-wrap break-words text-xs text-muted-foreground',
+              style: { maxHeight: '280px', overflow: 'auto' },
+              children: tail.content,
+            }, 'content')
+          : jsx('p', { className: 'text-xs text-muted-foreground', children: emptyMessage }, 'empty'),
+    ],
+  })
+}
+
+/**
  * @param {import('@hermes/plugin-sdk').PluginContext} ctx
  * @param {{ signal: AbortSignal }} runtime
  */
@@ -770,10 +819,12 @@ function createGameHostPage(ctx, runtime) {
     /** @param {string} logId */
     async function handleLogTail(logId) {
       if (!game) return
+      setLogTail({ logId, state: 'loading', content: '' })
       try {
-        const tail = await ctx.rest(`/proxy/api/diagnostics/${game.id}/logs/${encodeURIComponent(logId)}?redact=true`)
-        setLogTail(tail)
+        const tail = /** @type {DiagnosticTail} */ (await ctx.rest(`/proxy/api/diagnostics/${game.id}/logs/${encodeURIComponent(logId)}?redact=true`))
+        setLogTail({ ...tail, logId: tail.logId || logId })
       } catch (error) {
+        setLogTail({ logId, state: 'error', content: '' })
         host.notifyError(error, 'Log tail failed')
       }
     }
@@ -1171,6 +1222,9 @@ function createGameHostPage(ctx, runtime) {
                   }, 'bundle'),
                 ],
               }, 'header'),
+              logTail?.logId === 'diagnostics-bundle'
+                ? jsx(DiagnosticTailPanel, { tail: logTail, onClose: () => setLogTail(null) }, 'bundle-output')
+                : null,
               diagnosticsQuery.isError
                 ? jsx('p', { className: 'mt-3 text-xs text-muted-foreground', children: diagnosticsQuery.error instanceof Error ? diagnosticsQuery.error.message : 'Diagnostics are unavailable for this game.' }, 'error')
                 : diagnosticsQuery.isLoading
@@ -1180,25 +1234,38 @@ function createGameHostPage(ctx, runtime) {
                     : jsx('div', {
                         className: 'mt-3 grid gap-2',
                         children: Object.entries(diagnosticsQuery.data.logs).map(([logId, relativePath]) => jsx('div', {
-                          className: 'flex items-center justify-between gap-3 p-3',
-                          style: panelStyle,
+                          className: 'grid gap-2',
                           children: [
                             jsx('div', {
-                              className: 'min-w-0',
+                              className: 'flex items-center justify-between gap-3 p-3',
+                              style: panelStyle,
                               children: [
-                                jsx('div', { className: 'text-xs font-medium', children: logId }, 'id'),
-                                jsx('div', { className: 'mt-1 truncate text-xs text-muted-foreground', title: String(relativePath), children: relativePath }, 'path'),
+                                jsx('div', {
+                                  className: 'min-w-0',
+                                  children: [
+                                    jsx('div', { className: 'text-xs font-medium', children: logId }, 'id'),
+                                    jsx('div', { className: 'mt-1 truncate text-xs text-muted-foreground', title: String(relativePath), children: relativePath }, 'path'),
+                                  ],
+                                }, 'copy'),
+                                jsx(Button, {
+                                  disabled: logTail?.state === 'loading',
+                                  onClick: () => handleLogTail(logId),
+                                  size: 'sm',
+                                  variant: 'ghost',
+                                  children: logTail?.logId === logId && logTail.state === 'loading'
+                                    ? 'Loading…'
+                                    : logTail?.logId === logId
+                                      ? 'Refresh tail'
+                                      : 'View tail',
+                                }, 'view'),
                               ],
-                            }, 'copy'),
-                            jsx(Button, { onClick: () => handleLogTail(logId), size: 'sm', variant: 'ghost', children: 'View tail' }, 'view'),
+                            }, 'row'),
+                            logTail?.logId === logId
+                              ? jsx(DiagnosticTailPanel, { tail: logTail, onClose: () => setLogTail(null) }, 'tail')
+                              : null,
                           ],
                         }, logId)),
                       }, 'logs'),
-              logTail ? jsx('pre', {
-                className: 'mt-3 whitespace-pre-wrap break-words p-3 text-xs text-muted-foreground',
-                style: { ...panelStyle, maxHeight: '240px', overflow: 'auto' },
-                children: logTail.content || `No readable text (${logTail.state || 'unknown'}).`,
-              }, 'tail') : null,
             ],
           }, 'diagnostics'),
 
