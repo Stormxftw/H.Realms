@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import socket
 import struct
@@ -84,8 +85,66 @@ def find_process_pid(needle: str, *, proc_root: Path = Path("/proc")) -> int | N
     return None
 
 
+def _format_uptime(seconds: int) -> str:
+    days, remainder = divmod(max(0, seconds), 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, remaining_seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
+
+
+def _process_metrics(
+    pid: int,
+    *,
+    proc_root: Path,
+    clock_ticks_per_second: int | None,
+) -> dict[str, Any]:
+    """Read optional Linux procfs metrics without changing process health."""
+    metrics: dict[str, Any] = {}
+    process_root = Path(proc_root) / str(pid)
+
+    try:
+        status = (process_root / "status").read_text(encoding="utf-8", errors="replace")
+        rss_match = re.search(r"^VmRSS:\s+(\d+)\s+kB$", status, flags=re.MULTILINE)
+        if rss_match is not None:
+            metrics["rssMB"] = round(int(rss_match.group(1)) / 1024, 1)
+    except (OSError, ValueError):
+        pass
+
+    try:
+        stat = (process_root / "stat").read_text(encoding="utf-8", errors="replace")
+        command_end = stat.rfind(")")
+        if command_end < 0:
+            raise ValueError("malformed process stat")
+        stat_tail = stat[command_end + 1 :].split()
+        start_ticks = int(stat_tail[19])
+        system_uptime = float((Path(proc_root) / "uptime").read_text().split()[0])
+        tick_rate = (
+            int(clock_ticks_per_second)
+            if clock_ticks_per_second is not None
+            else int(os.sysconf("SC_CLK_TCK"))
+        )
+        if tick_rate <= 0:
+            raise ValueError("invalid process clock tick rate")
+        uptime_seconds = max(0, int(system_uptime - (start_ticks / tick_rate)))
+        metrics["uptimeSeconds"] = uptime_seconds
+        metrics["uptimeHuman"] = _format_uptime(uptime_seconds)
+    except (ArithmeticError, IndexError, OSError, TypeError, ValueError):
+        pass
+
+    return metrics
+
+
 def probe_process(
-    needle: str, *, proc_root: Path = Path("/proc")
+    needle: str,
+    *,
+    proc_root: Path = Path("/proc"),
+    clock_ticks_per_second: int | None = None,
 ) -> dict[str, Any]:
     try:
         pid = find_process_pid(needle, proc_root=proc_root)
@@ -96,12 +155,21 @@ def probe_process(
             "pid": None,
             "error": str(exc),
         }
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "running": pid is not None,
         "pid": pid,
         "error": None,
     }
+    if pid is not None:
+        result.update(
+            _process_metrics(
+                pid,
+                proc_root=proc_root,
+                clock_ticks_per_second=clock_ticks_per_second,
+            )
+        )
+    return result
 
 
 def _run(command: list[str], timeout: int = 3) -> dict[str, Any]:
