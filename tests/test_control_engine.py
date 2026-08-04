@@ -48,21 +48,23 @@ def _create_executable_adapter_scripts(project_dir):
 
 
 class ControlEngineCatalogTests(unittest.TestCase):
-    def test_checked_in_registry_loads_read_only_against_real_projects_root(self):
+    def test_checked_in_registry_loads_read_only_against_generic_projects_root(self):
         repository_root = Path(__file__).parents[1]
         audit_path = repository_root / "tests" / ".real-config-audit-must-not-exist.jsonl"
         self.assertFalse(audit_path.exists())
 
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp)
+            projects_root = state_root / "projects"
+            projects_root.mkdir()
             engine = ControlEngine(
-                projects_root=Path("/run/media/zim/a drive/Hermes/Projects"),
+                projects_root=projects_root,
                 profiles_dir=repository_root / "game_profiles",
                 audit_path=audit_path,
                 adapter_config_path=repository_root / "game_adapters.json",
                 operation_store=OperationStore(
                     db_path=state_root / "operations.db",
-                    private_path_prefixes=(Path.home(), Path("/run/media/zim/a drive/Hermes/Projects")),
+                    private_path_prefixes=(Path.home(), projects_root),
                 ),
                 restart_state_store=RestartStateStore(
                     state_root / "restart-state.json"

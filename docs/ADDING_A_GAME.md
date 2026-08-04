@@ -154,7 +154,7 @@ Then your profile can include controls with `"binding": { "action": "property.se
 After adding a game, restart the console and verify:
 
 ```bash
-cd "/run/media/zim/a drive/Hermes/Projects/game-host-dashboard"
+cd /path/to/hermes-game-host-console
 ./stop.sh && ./start.sh
 curl -s http://127.0.0.1:5057/api/controls | python3 -m json.tool | grep -A2 '"id"'
 ```

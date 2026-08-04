@@ -1,0 +1,6 @@
+# Trust-boundary files require maintainer review even when package checks pass.
+/catalog/ @Stormxftw
+/schemas/ @Stormxftw
+/profile_store.py @Stormxftw
+/scripts/build-profile-catalog.py @Stormxftw
+/.github/workflows/ @Stormxftw

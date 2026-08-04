@@ -1,0 +1,100 @@
+{
+  "adapter": {
+    "commands": {
+      "service.restart": [
+        [
+          "stop.sh",
+          60
+        ],
+        [
+          "start.sh",
+          180
+        ]
+      ],
+      "service.start": [
+        [
+          "start.sh",
+          180
+        ]
+      ],
+      "service.stop": [
+        [
+          "stop.sh",
+          60
+        ]
+      ]
+    },
+    "defaultPort": 10999,
+    "notes": "SteamCMD anonymous login supported. Requires cluster token from Klei at https://accounts.klei.com/account/game/servers.",
+    "portProtocol": "udp",
+    "processSearch": "dontstarve_dedicated_server_nullrenderer",
+    "projectDir": "dst-server",
+    "propertyTypes": {},
+    "statusCollector": "process_only",
+    "steamAppId": 343050
+  },
+  "id": "dont-starve-together",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Stops the DST overworld and caves shards. Players will be kicked.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      }
+    ],
+    "description": "DST dedicated server. SteamCMD AppID 343050 \u2014 anonymous login. Requires a cluster token from Klei at https://accounts.klei.com/account/game/servers.",
+    "icon": "Flame",
+    "id": "dont-starve-together",
+    "name": "Don't Starve Together",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "survival",
+    "co-op",
+    "steam"
+  ],
+  "version": "1.0.0"
+}

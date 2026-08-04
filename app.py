@@ -27,6 +27,7 @@ from control_engine import (
 from operations import OperationStore
 from restart_state import RestartStateStore
 from store import InstalledStore
+from profile_store import DEFAULT_INDEX_URL, ProfileStore, ProfileStoreError
 import app_backups
 import app_diagnostics
 
@@ -123,17 +124,39 @@ def catalog_data(
 def store_data(
     control_engine: ControlEngine,
     installed_store: InstalledStore | None = None,
+    profile_store: ProfileStore | None = None,
 ) -> dict[str, Any]:
-    """Return the store catalog: every supported game plus the installed set."""
+    """Return the official GitHub catalog merged with active local profiles."""
     installed = installed_store.installed_ids() if installed_store else set()
     catalog = control_engine.catalog()
+    local_by_id = {str(game["id"]): game for game in catalog["games"]}
+    catalog_source = "bundled"
+    catalog_warning: str | None = None
+    if profile_store is not None:
+        remote, catalog_source, catalog_warning = profile_store.refresh()
+        remote_entries = list(remote["games"])
+    else:
+        remote_entries = [
+            {
+                "id": game["id"],
+                "name": game["name"],
+                "description": game.get("description", ""),
+                "version": "bundled",
+                "tags": [],
+            }
+            for game in catalog["games"]
+        ]
     available: list[dict[str, Any]] = []
-    for game in catalog["games"]:
+    for remote in remote_entries:
+        game = local_by_id.get(str(remote["id"]), {})
         entry = {
-            "id": game["id"],
-            "name": game["name"],
-            "description": game.get("description", ""),
-            "installed": game["id"] in installed,
+            "id": remote["id"],
+            "name": remote["name"],
+            "description": remote.get("description", ""),
+            "version": remote.get("version"),
+            "tags": remote.get("tags", []),
+            "source": "official-github" if profile_store is not None else "bundled",
+            "installed": remote["id"] in installed,
             "projectPresent": bool(game.get("projectPresent")),
             "readiness": game.get("readiness"),
             "notes": game.get("notes", ""),
@@ -144,6 +167,8 @@ def store_data(
         "generatedAt": iso(),
         "installed": sorted(installed),
         "store": available,
+        "catalogSource": catalog_source,
+        "catalogWarning": catalog_warning,
     }
 
 
@@ -195,6 +220,31 @@ def scaffold_project(
             "files and action scripts are not yet installed. Use the Hermes "
             "`game-host-console` skill (or manual setup in this directory) to "
             "provision `start.sh` / `stop.sh` and the server binary.\n",
+            encoding="utf-8",
+        )
+    return str(target)
+
+
+def scaffold_project_from_adapter(
+    projects_root: Path,
+    game_id: str,
+    adapter: dict[str, Any],
+) -> str:
+    """Create a confined project home from an already verified store adapter."""
+    project_dir = Path(str(adapter["projectDir"]))
+    root = projects_root.resolve()
+    target = (projects_root / project_dir).resolve()
+    if project_dir.is_absolute() or target == root or not target.is_relative_to(root):
+        raise ControlEngineError("project path escapes PROJECTS_ROOT")
+    target.mkdir(parents=True, exist_ok=True)
+    note = target / "PROVISION.md"
+    if not note.exists():
+        note.write_text(
+            "# Provisioning\n\n"
+            f"Game `{game_id}` was added to the console from the verified official "
+            "profile catalog. Its server files and action scripts are not yet installed. "
+            "Restart the Game Host Console to activate the profile, then provision the "
+            "server binary and approved scripts.\n",
             encoding="utf-8",
         )
     return str(target)
@@ -391,6 +441,7 @@ class Handler(BaseHTTPRequestHandler):
                     store_data(
                         self.control_engine,
                         getattr(self.server, "installed_store", None),
+                        getattr(self.server, "profile_store", None),
                     ),
                 )
             elif path == "/api/operations":
@@ -501,6 +552,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": str(exc), "generatedAt": iso()})
         except app_backups.BackupOperationError as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
+        except ProfileStoreError as exc:
+            self.send_json(503, {"error": str(exc), "generatedAt": iso()})
         except ControlEngineError as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
@@ -558,15 +611,34 @@ class Handler(BaseHTTPRequestHandler):
                     raise ControlEngineError("invalid game id")
                 installed_store = self.server.installed_store
                 if install:
+                    active_ids = {
+                        str(game["id"]) for game in self.control_engine.catalog()["games"]
+                    }
+                    restart_required = game_id not in active_ids
+                    if restart_required:
+                        profile_store = getattr(self.server, "profile_store", None)
+                        if profile_store is None:
+                            raise ControlEngineError(f"unknown game: {game_id}")
+                        installed_package = profile_store.install(game_id)
+                        scaffolded = scaffold_project_from_adapter(
+                            self.server.projects_root,
+                            game_id,
+                            installed_package["package"]["adapter"],
+                        )
+                    else:
+                        scaffolded = scaffold_project(
+                            self.server.projects_root,
+                            self.server.adapter_config_path,
+                            game_id,
+                        )
                     installed_store.install(game_id)
-                    scaffolded = scaffold_project(
-                        self.server.projects_root,
-                        self.server.adapter_config_path,
-                        game_id,
-                    )
                 else:
                     installed_store.uninstall(game_id)
                     scaffolded = None
+                    profile_store = getattr(self.server, "profile_store", None)
+                    restart_required = bool(
+                        profile_store is not None and profile_store.is_downloaded(game_id)
+                    )
                 self.send_json(
                     200,
                     {
@@ -574,6 +646,7 @@ class Handler(BaseHTTPRequestHandler):
                         "installed": install,
                         "installedIds": sorted(installed_store.installed_ids()),
                         "projectDir": scaffolded,
+                        "restartRequired": restart_required,
                         "generatedAt": iso(),
                     },
                 )
@@ -641,6 +714,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": str(exc), "generatedAt": iso()})
         except app_backups.BackupOperationError as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
+        except ProfileStoreError as exc:
+            self.send_json(503, {"error": str(exc), "generatedAt": iso()})
         except (ControlEngineError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
@@ -695,9 +770,27 @@ def create_server(
     restart_state_store: RestartStateStore | None = None,
     executor: Executor | None = None,
     installed_store: InstalledStore | None = None,
+    profile_store: ProfileStore | None = None,
 ) -> ThreadingHTTPServer:
     require_loopback_host(host)
-    config_path = Path(adapter_config_path or ADAPTER_CONFIG_PATH)
+    source_config_path = Path(adapter_config_path or ADAPTER_CONFIG_PATH)
+    source_profiles_dir = Path(profiles_dir)
+    installed_store = installed_store or InstalledStore(ROOT / "data" / "installed.json")
+    if profile_store is None and source_profiles_dir == PROFILES_DIR:
+        profile_store = ProfileStore(
+            cache_dir=ROOT / "data" / "profile-store",
+            schemas_dir=ROOT / "schemas",
+            bundled_index=ROOT / "catalog" / "index.json",
+            index_url=os.environ.get("GAME_HOST_STORE_INDEX_URL", DEFAULT_INDEX_URL),
+        )
+    if profile_store is not None:
+        profiles_dir, config_path = profile_store.materialize(
+            bundled_profiles=source_profiles_dir,
+            bundled_adapters=source_config_path,
+            active_ids=installed_store.installed_ids(),
+        )
+    else:
+        config_path = source_config_path
     adapters = load_adapters(config_path)
     engine_holder: dict[str, ControlEngine] = {}
 
@@ -736,7 +829,6 @@ def create_server(
     )
     engine_holder["engine"] = control_engine
     control_engine.recover_interrupted_operations()
-    installed_store = installed_store or InstalledStore(ROOT / "data" / "installed.json")
     seed_installed_from_runtime(control_engine, installed_store, status_provider)
     server = GameHostHTTPServer((host, port), Handler)
     server.control_engine = control_engine  # type: ignore[attr-defined]
@@ -744,6 +836,7 @@ def create_server(
     server.telemetry_collector = telemetry_collector  # type: ignore[attr-defined]
     server.lan_address = lan_address  # type: ignore[attr-defined]
     server.installed_store = installed_store  # type: ignore[attr-defined]
+    server.profile_store = profile_store  # type: ignore[attr-defined]
     server.projects_root = Path(projects_root)  # type: ignore[attr-defined]
     return server
 

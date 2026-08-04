@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import threading
@@ -7,6 +8,7 @@ from pathlib import Path
 
 import app
 from store import InstalledStore
+from profile_store import ProfileStore
 
 _ADAPTER = {
     "games": {
@@ -87,7 +89,7 @@ def _collect(**kwargs):
 
 
 class StoreApiTests(unittest.TestCase):
-    def _start(self, root: Path):
+    def _start(self, root: Path, profile_store=None):
         server = app.create_server(
             host="127.0.0.1",
             port=0,
@@ -97,6 +99,7 @@ class StoreApiTests(unittest.TestCase):
             adapter_config_path=root / "game_adapters.json",
             telemetry_collector=_collect,
             installed_store=app.InstalledStore(root / "installed.json", seed={"alpha"}),
+            profile_store=profile_store,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -191,6 +194,110 @@ class StoreApiTests(unittest.TestCase):
                     ) as err:
                         self._post(base, "/api/store/install", {"gameId": bad})
                     self.assertEqual(400, err.exception.code)
+                self.assertEqual(
+                    {"alpha"}, InstalledStore(root / "installed.json").installed_ids()
+                )
+                self.assertFalse((root / "projects" / "does-not-exist").exists())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+
+    def test_verified_remote_profile_is_listed_installed_and_active_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_tree(root)
+            package = {
+                "schemaVersion": 1,
+                "id": "gamma",
+                "version": "1.0.0",
+                "tags": ["test"],
+                "profile": {
+                    "schemaVersion": "1.0",
+                    "id": "gamma",
+                    "name": "Gamma",
+                    "description": "Remote profile",
+                    "controls": [
+                        {
+                            "id": "start",
+                            "kind": "button",
+                            "label": "Start",
+                            "risk": "service",
+                            "binding": {"action": "service.start"},
+                        }
+                    ],
+                },
+                "adapter": {
+                    "projectDir": "community/gamma",
+                    "commands": {"service.start": [["start.sh", 60]]},
+                    "propertyTypes": {},
+                    "statusCollector": "process_only",
+                    "processSearch": "gamma-server",
+                    "defaultPort": 7799,
+                    "portProtocol": "tcp",
+                },
+            }
+            package_raw = (json.dumps(package, indent=2, sort_keys=True) + "\n").encode()
+            index = {
+                "schemaVersion": 1,
+                "repository": "https://github.com/Stormxftw/hermes-game-host-console",
+                "games": [
+                    {
+                        "id": "gamma",
+                        "name": "Gamma",
+                        "description": "Remote profile",
+                        "version": "1.0.0",
+                        "packagePath": "packages/gamma.json",
+                        "sha256": hashlib.sha256(package_raw).hexdigest(),
+                        "sizeBytes": len(package_raw),
+                        "tags": ["test"],
+                    }
+                ],
+            }
+            responses = {
+                "test://catalog/index.json": (json.dumps(index) + "\n").encode(),
+                "packages/gamma.json": package_raw,
+            }
+            profile_store = ProfileStore(
+                cache_dir=root / "profile-cache",
+                schemas_dir=Path(__file__).resolve().parents[1] / "schemas",
+                bundled_index=root / "missing-index.json",
+                index_url="test://catalog/index.json",
+                fetcher=lambda url, _limit: responses[url],
+                refresh_ttl=0,
+                allow_test_urls=True,
+            )
+            server, thread, base = self._start(root, profile_store)
+            try:
+                store = self._get(base, "/api/store")
+                self.assertEqual(["gamma"], [item["id"] for item in store["store"]])
+                self.assertEqual("github", store["catalogSource"])
+                status, result = self._post(base, "/api/store/install", {"gameId": "gamma"})
+                self.assertEqual(200, status)
+                self.assertTrue(result["restartRequired"])
+                self.assertTrue((profile_store.packages_dir / "gamma.json").is_file())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+            server, thread, base = self._start(root, profile_store)
+            try:
+                catalog = self._get(base, "/api/controls")
+                self.assertIn("gamma", [game["id"] for game in catalog["games"]])
+                status, result = self._post(base, "/api/store/uninstall", {"gameId": "gamma"})
+                self.assertEqual(200, status)
+                self.assertTrue(result["restartRequired"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+            server, thread, base = self._start(root, profile_store)
+            try:
+                catalog = self._get(base, "/api/controls")
+                self.assertNotIn("gamma", [game["id"] for game in catalog["games"]])
             finally:
                 server.shutdown()
                 server.server_close()

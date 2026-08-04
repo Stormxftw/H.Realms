@@ -27,11 +27,15 @@ REQUIRED_RELEASE_ARTIFACTS = (
     "operations.py",
     "restart_state.py",
     "store.py",
+    "profile_store.py",
     "data/schema.sql",
     "game_adapters.json",
     "static/index.html",
     "static/app.css",
     "static/app.js",
+    "README.md",
+    "assets/branding/README.md",
+    "assets/branding/hermes-game-host-console-banner.webp",
     "desktop-plugin/plugin.js",
     "assets/game-art/manifest.json",
     "assets/game-art/palworld/hero.webp",
@@ -62,11 +66,25 @@ REQUIRED_RELEASE_ARTIFACTS = (
     "tests/test_operations.py",
     "tests/test_restart_state.py",
     "tests/test_store_api.py",
+    "tests/test_profile_store.py",
     "tests/ui.test.js",
     "tests/desktop_plugin.test.js",
     "tests/tsconfig.desktop-plugin.json",
+    "tests/desktop-plugin-shims.d.ts",
     "tests/test_release_scaffold.py",
     "scripts/release-check.sh",
+    "scripts/build-profile-catalog.py",
+    "catalog/index.json",
+    "catalog/packages/cs2.json",
+    "catalog/packages/dont-starve-together.json",
+    "catalog/packages/enshrouded.json",
+    "catalog/packages/minecraft.json",
+    "catalog/packages/palworld.json",
+    "catalog/packages/satisfactory.json",
+    "catalog/packages/sons-of-the-forest.json",
+    "catalog/packages/terraria.json",
+    "catalog/packages/valheim.json",
+    "CONTRIBUTING.md",
     "start.sh",
     "status.sh",
     "stop.sh",
@@ -76,6 +94,7 @@ REQUIRED_RELEASE_ARTIFACTS = (
 
 REQUIRED_EXECUTABLE_ARTIFACTS = (
     "scripts/release-check.sh",
+    "scripts/build-profile-catalog.py",
     "start.sh",
     "status.sh",
     "stop.sh",
@@ -101,6 +120,7 @@ CATEGORY_SENTINELS = {
     "profiles/sons-of-the-forest": "game_profiles/sons-of-the-forest.json",
     "profiles/terraria": "game_profiles/terraria.json",
     "profiles/valheim": "game_profiles/valheim.json",
+    "official profile catalog": "catalog/index.json",
     "tests": "tests/ui.test.js",
     "lifecycle scripts": "start.sh",
 }
@@ -186,6 +206,7 @@ class ReleaseScaffoldTests(unittest.TestCase):
             "data/operations.db-journal",
             "data/restart-state.json",
             "data/control-audit.jsonl",
+            "data/profile-store/packages/example.json",
             "tests/browser/output/results.json",
             "playwright-report/index.html",
             "downloads/game-server.tar.gz",
@@ -420,6 +441,7 @@ exit 0
                 "node:tests/ui.test.js",
                 "node:tests/desktop_plugin.test.js",
                 "hermes-python:-m unittest tests.test_plugin_api -v",
+                "python:scripts/build-profile-catalog.py --check",
                 "python:- ",
                 "tsc:--project tests/tsconfig.desktop-plugin.json --noEmit --pretty false",
                 "git:diff --check",
@@ -469,7 +491,7 @@ exit 0
                 "home-tsc:--project tests/tsconfig.desktop-plugin.json --noEmit --pretty false",
                 calls,
             )
-            self.assertNotIn("/home/zim", RELEASE_CHECK.read_text(encoding="utf-8"))
+            self.assertNotIn(str(Path.home()), RELEASE_CHECK.read_text(encoding="utf-8"))
 
     def test_release_archive_requires_every_v1_artifact_category(self):
         for category, sentinel in CATEGORY_SENTINELS.items():

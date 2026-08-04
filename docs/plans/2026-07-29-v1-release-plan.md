@@ -1,6 +1,6 @@
 # Hermes Game Host Console v1 Release Plan
 
-> **For Hermes:** After Joe approves this plan, implement it with `subagent-driven-development` and strict TDD. Do not begin implementation from this document without that approval.
+> **For Hermes:** After the maintainer approves this plan, implement it with `subagent-driven-development` and strict TDD. Do not begin implementation from this document without that approval.
 
 **Goal:** Turn the current working MVP into a trustworthy v1 for operating already-installed local game servers without lying about readiness, status, action outcomes, or recoverability.
 
@@ -441,17 +441,17 @@ Every implementation slice follows RED → GREEN → REFACTOR and ends with the 
 ## Current green path to preserve
 
 ```bash
-cd "/run/media/zim/a drive/Hermes/Projects/game-host-dashboard"
+cd /path/to/hermes-game-host-console
 python3 -m unittest discover -s tests -v
 node tests/ui.test.js
 node tests/desktop_plugin.test.js
-/home/zim/.hermes/hermes-agent/venv/bin/python -m unittest tests.test_plugin_api -v
+${HERMES_AGENT_ROOT}/venv/bin/python -m unittest tests.test_plugin_api -v
 curl -fsS http://127.0.0.1:5057/health
 ```
 
 ## v1 release definition of done
 
-- All P0 and P1 stories above are accepted or explicitly descoped by Joe.
+- All P0 and P1 stories above are accepted or explicitly descoped by maintainer.
 - Minecraft and Palworld pass real, non-destructive readiness/status/backup verification on this host.
 - Catalog-only games cannot run mutations and clearly explain setup requirements.
 - No hardcoded personal IP/network fallback remains.
@@ -464,7 +464,7 @@ curl -fsS http://127.0.0.1:5057/health
 - Doctor and the complete release gate pass.
 - The plan is reviewed before any product-code implementation begins.
 
-## Decisions Joe should review
+## Decisions maintainer should review
 
 1. **Support boundary:** approve Minecraft + Palworld as the only fully managed v1 games; keep the other seven as disabled setup templates.
 2. **Recovery boundary:** approve tested restore support as a v1 requirement rather than backup-create only.

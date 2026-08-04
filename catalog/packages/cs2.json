@@ -1,0 +1,100 @@
+{
+  "adapter": {
+    "commands": {
+      "service.restart": [
+        [
+          "stop.sh",
+          60
+        ],
+        [
+          "start.sh",
+          120
+        ]
+      ],
+      "service.start": [
+        [
+          "start.sh",
+          120
+        ]
+      ],
+      "service.stop": [
+        [
+          "stop.sh",
+          60
+        ]
+      ]
+    },
+    "defaultPort": 27015,
+    "notes": "SteamCMD requires game ownership token (GSLT). Create token at https://steamcommunity.com/dev/managegameservers.",
+    "portProtocol": "udp",
+    "processSearch": "cs2",
+    "projectDir": "cs2-server",
+    "propertyTypes": {},
+    "statusCollector": "steam_query",
+    "steamAppId": 730
+  },
+  "id": "cs2",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Stops the CS2 server. Match in progress will be lost.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      }
+    ],
+    "description": "CS2 dedicated server via SteamCMD. Requires a Game Server Login Token (GSLT) from https://steamcommunity.com/dev/managegameservers. Set in start.sh as +sv_setsteamaccount <TOKEN>.",
+    "icon": "Target",
+    "id": "cs2",
+    "name": "Counter-Strike 2",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "fps",
+    "competitive",
+    "steam"
+  ],
+  "version": "1.0.0"
+}

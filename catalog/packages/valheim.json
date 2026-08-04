@@ -1,0 +1,107 @@
+{
+  "adapter": {
+    "additionalPorts": [
+      {
+        "name": "query",
+        "port": 2457,
+        "protocol": "udp"
+      }
+    ],
+    "commands": {
+      "service.restart": [
+        [
+          "stop.sh",
+          60
+        ],
+        [
+          "start.sh",
+          120
+        ]
+      ],
+      "service.start": [
+        [
+          "start.sh",
+          120
+        ]
+      ],
+      "service.stop": [
+        [
+          "stop.sh",
+          60
+        ]
+      ]
+    },
+    "defaultPort": 2456,
+    "notes": "SteamCMD anonymous login supported. World name and password in start.sh.",
+    "portProtocol": "udp",
+    "processSearch": "valheim_server.x86_64",
+    "projectDir": "valheim-server",
+    "propertyTypes": {},
+    "queryPort": 2457,
+    "statusCollector": "steam_query",
+    "steamAppId": 896660
+  },
+  "id": "valheim",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Sends SIGTERM to valheim_server. Players will be disconnected.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      }
+    ],
+    "description": "Viking survival dedicated server. SteamCMD AppID 896660 \u2014 anonymous login supported. World name, seed, and password set in start.sh.",
+    "icon": "Shield",
+    "id": "valheim",
+    "name": "Valheim",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "survival",
+    "steam"
+  ],
+  "version": "1.0.0"
+}

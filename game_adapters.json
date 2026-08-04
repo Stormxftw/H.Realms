@@ -120,7 +120,7 @@
         }
       ],
       "backup": {
-        "projectDir": "/run/media/zim/a drive/GameServers/PalworldServerLinux",
+        "projectDir": "palworld-server-local",
         "sourceDir": "Pal/Saved",
         "backupDir": "backups"
       }

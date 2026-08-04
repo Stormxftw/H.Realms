@@ -1,0 +1,34 @@
+name: Profile catalog verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "schemas/**"
+      - "profile_store.py"
+      - "scripts/build-profile-catalog.py"
+      - "tests/test_profile_store.py"
+      - "tests/test_store_api.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Verify generated catalog and every package
+        run: uv run --no-project --with jsonschema python3 scripts/build-profile-catalog.py --check
+      - name: Run catalog and public API tests
+        run: uv run --no-project --with jsonschema python3 -m unittest tests.test_profile_store tests.test_store_api -v
+      - name: Reject whitespace errors
+        run: git diff --check

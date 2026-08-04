@@ -1,0 +1,129 @@
+{
+  "games": [
+    {
+      "description": "CS2 dedicated server via SteamCMD. Requires a Game Server Login Token (GSLT) from https://steamcommunity.com/dev/managegameservers. Set in start.sh as +sv_setsteamaccount <TOKEN>.",
+      "id": "cs2",
+      "name": "Counter-Strike 2",
+      "packagePath": "packages/cs2.json",
+      "sha256": "a66ea02cf1225ec83f381547373e3d71b7d515d93a97d828de07013765d0398d",
+      "sizeBytes": 2339,
+      "tags": [
+        "fps",
+        "competitive",
+        "steam"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "DST dedicated server. SteamCMD AppID 343050 \u2014 anonymous login. Requires a cluster token from Klei at https://accounts.klei.com/account/game/servers.",
+      "id": "dont-starve-together",
+      "name": "Don't Starve Together",
+      "packagePath": "packages/dont-starve-together.json",
+      "sha256": "ef673026329259a6c5714b8b6f08fb829498d82afc01720d40a2b29989b192b8",
+      "sizeBytes": 2410,
+      "tags": [
+        "survival",
+        "co-op",
+        "steam"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Enshrouded dedicated server. SteamCMD AppID 2278520 \u2014 anonymous login. UE5-based, needs decent hardware. Server password and settings in enshrouded_server.json.",
+      "id": "enshrouded",
+      "name": "Enshrouded",
+      "packagePath": "packages/enshrouded.json",
+      "sha256": "486f818933942fcd68cbcf38042a28cb6171dec1d53725445a494fbd1357212b",
+      "sizeBytes": 2495,
+      "tags": [
+        "survival",
+        "co-op",
+        "steam"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Fabric server controls. Every mutation is previewed, confirmed, audited, and reversible where possible.",
+      "id": "minecraft",
+      "name": "Minecraft Java",
+      "packagePath": "packages/minecraft.json",
+      "sha256": "8288f0fc9b97c4464388fd6bca6d76b9619a7f27fb699a3ca9386b943e67c204",
+      "sizeBytes": 5274,
+      "tags": [
+        "sandbox",
+        "survival",
+        "java"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Linux dedicated-server controls. Live settings remain locked until a typed Palworld settings adapter is added.",
+      "id": "palworld",
+      "name": "Palworld",
+      "packagePath": "packages/palworld.json",
+      "sha256": "bdf73c5bc1f9c43fe218b7ff6d1c7f9ae78fa1e785e736aa466543f7c3b66cc7",
+      "sizeBytes": 3491,
+      "tags": [
+        "survival",
+        "creature-collection"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Satisfactory dedicated server. SteamCMD AppID 1690800 \u2014 anonymous login. Large download (~12GB). Needs significant RAM for large factories.",
+      "id": "satisfactory",
+      "name": "Satisfactory",
+      "packagePath": "packages/satisfactory.json",
+      "sha256": "181409474fad4332fb9aa9f4fba41928e3913e5b113fe4d7a81828d700035500",
+      "sizeBytes": 2327,
+      "tags": [
+        "automation",
+        "co-op",
+        "steam"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Sons of the Forest dedicated server. SteamCMD AppID 2465200 \u2014 anonymous login. Survival horror co-op. Config in dedicatedserver.cfg.",
+      "id": "sons-of-the-forest",
+      "name": "Sons of the Forest",
+      "packagePath": "packages/sons-of-the-forest.json",
+      "sha256": "1526be9fdd6f4cd449f4382f7a1feb324fd0b67d72a6943d9e5ff348748ff865",
+      "sizeBytes": 2453,
+      "tags": [
+        "survival",
+        "co-op",
+        "steam"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Terraria dedicated server. Not on SteamCMD \u2014 download terraria-server from terraria.org or use the Steam client dedicated server tool. World file (.wld) must be generated first via the game client.",
+      "id": "terraria",
+      "name": "Terraria",
+      "packagePath": "packages/terraria.json",
+      "sha256": "ff45bd39d99056c686e3345fa7ddc1e4e2eb552a4528f2ed941278cc5ad5a076",
+      "sizeBytes": 2407,
+      "tags": [
+        "sandbox",
+        "survival"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "description": "Viking survival dedicated server. SteamCMD AppID 896660 \u2014 anonymous login supported. World name, seed, and password set in start.sh.",
+      "id": "valheim",
+      "name": "Valheim",
+      "packagePath": "packages/valheim.json",
+      "sha256": "d89f1b438be9675b8e99ee739ec49bfd2b932bda9a293447b27db62c391fa488",
+      "sizeBytes": 2419,
+      "tags": [
+        "survival",
+        "steam"
+      ],
+      "version": "1.0.0"
+    }
+  ],
+  "repository": "https://github.com/Stormxftw/hermes-game-host-console",
+  "schemaVersion": 1
+}

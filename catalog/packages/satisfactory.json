@@ -1,0 +1,100 @@
+{
+  "adapter": {
+    "commands": {
+      "service.restart": [
+        [
+          "stop.sh",
+          120
+        ],
+        [
+          "start.sh",
+          180
+        ]
+      ],
+      "service.start": [
+        [
+          "start.sh",
+          180
+        ]
+      ],
+      "service.stop": [
+        [
+          "stop.sh",
+          120
+        ]
+      ]
+    },
+    "defaultPort": 7777,
+    "notes": "SteamCMD anonymous login supported. Large download (~12GB). Needs significant RAM.",
+    "portProtocol": "udp",
+    "processSearch": "FactoryServer.sh",
+    "projectDir": "satisfactory-server",
+    "propertyTypes": {},
+    "statusCollector": "process_only",
+    "steamAppId": 1690800
+  },
+  "id": "satisfactory",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Stops the Satisfactory server. Auto-save runs before shutdown.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      }
+    ],
+    "description": "Satisfactory dedicated server. SteamCMD AppID 1690800 \u2014 anonymous login. Large download (~12GB). Needs significant RAM for large factories.",
+    "icon": "Factory",
+    "id": "satisfactory",
+    "name": "Satisfactory",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "automation",
+    "co-op",
+    "steam"
+  ],
+  "version": "1.0.0"
+}

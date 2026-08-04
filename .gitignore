@@ -23,6 +23,8 @@ data/operations.db-journal
 data/restart-state.json
 data/control-audit.jsonl
 data/installed.json
+data/profile-store/
+data/local-game-adapters.json
 
 # Browser-test output
 /tests/browser/output/

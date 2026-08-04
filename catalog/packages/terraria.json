@@ -1,0 +1,98 @@
+{
+  "adapter": {
+    "commands": {
+      "service.restart": [
+        [
+          "stop.sh",
+          60
+        ],
+        [
+          "start.sh",
+          120
+        ]
+      ],
+      "service.start": [
+        [
+          "start.sh",
+          120
+        ]
+      ],
+      "service.stop": [
+        [
+          "stop.sh",
+          60
+        ]
+      ]
+    },
+    "defaultPort": 7777,
+    "notes": "Not on SteamCMD. Download from terraria.org or use the dedicated server tool in Steam library. World file (.wld) must be generated first.",
+    "portProtocol": "tcp",
+    "processSearch": "TerrariaServer",
+    "projectDir": "terraria-server",
+    "propertyTypes": {},
+    "statusCollector": "process_only"
+  },
+  "id": "terraria",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Stops TerrariaServer. Use 'exit' command for graceful save-and-exit, SIGTERM as fallback.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      }
+    ],
+    "description": "Terraria dedicated server. Not on SteamCMD \u2014 download terraria-server from terraria.org or use the Steam client dedicated server tool. World file (.wld) must be generated first via the game client.",
+    "icon": "Pickaxe",
+    "id": "terraria",
+    "name": "Terraria",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "sandbox",
+    "survival"
+  ],
+  "version": "1.0.0"
+}
