@@ -27,6 +27,10 @@ assert.match(source, /\/proxy\/api\/diagnostics\/\$\{game\.id\}\/logs\/\$\{encod
 assert.match(source, /async function handleLogTail\(logId\)[\s\S]*setLogTail\(\{ logId, state: ['"]loading['"], content: ['"]['"] \}\)[\s\S]*await ctx\.rest/);
 assert.match(source, /logTail\?\.logId === logId/);
 assert.match(source, /onClose: \(\) => setLogTail\(null\)/);
+assert.match(source, /ctx\.rest\(`\/art\/\$\{selectedGameId\}`\)/);
+assert.match(source, /artQuery\.data\?\.dataUrl/);
+assert.match(source, /objectPosition: artQuery\.data\?\.objectPosition/);
+assert.match(source, /alt: ''/);
 assert.doesNotMatch(source, /window\.confirm\(/);
 assert.match(source, /ctx\.onDispose\(\(\) => controller\.abort\(\)\)/);
 assert.match(source, /ctx\.i18n\.register\(\{[\s\S]*gameHost:[\s\S]*openLabel:/);

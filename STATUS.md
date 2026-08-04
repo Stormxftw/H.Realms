@@ -1,10 +1,12 @@
 # Hermes Game Host Console Status
 
-- Status: **Working MVP — Desktop loader and authenticated bridge repaired; live controls, backups, and diagnostics verified**
-- Latest verification: `2026-08-03 EDT` — Palworld remained `running_ready`; Desktop rendered the live verified backup and approved diagnostics logs; process telemetry now reports uptime and RSS memory; full suite green (**193 passed, 202 subtests**).
+- Status: **Working MVP — Desktop loader and authenticated bridge repaired; live controls, backups, diagnostics, telemetry, and repository-packaged game art verified**
+- Latest verification: `2026-08-04 EDT` — Palworld remained `running_ready` with PID `1496192`; Desktop rendered the live hosted-game hero, verified backup and approved diagnostics logs; process telemetry reports uptime and RSS memory; full suite green (**196 passed, 205 subtests**).
 
 ## UI Wiring (August 2026 update)
 - Desktop plugin surfaces **Backups** (list, create, preview restore, execute with exact token confirmation) and **Diagnostics** (log list, inline redacted tail with loading/error/binary states, bundle).
+- The hosted-game header now renders a Hermes-native, theme-aware hero from repository-packaged artwork; missing or rejected art falls back to the normal themed panel.
+- Artwork ships under `assets/game-art/` with a machine-readable allowlist, dimensions, SHA-256, provenance, non-endorsement note, and explicit asset license. The authenticated bridge validates and bounds the local WebP before returning a data URL; Desktop performs no publisher/CDN requests.
 - Root loader failure fixed: the Desktop plugin is once again a single-file ESM module with no unresolved relative imports.
 - Root bridge failure fixed: the authenticated proxy narrowly allows the typed backup/restore/diagnostics routes, bounded bodies/responses, and only `redact=true|false` on concrete log-tail routes.
 - The installer now backs up and removes the legacy `game-host-console.disabled` directory from the live scan root; renaming a plugin directory inside `desktop-plugins/` does not disable it.

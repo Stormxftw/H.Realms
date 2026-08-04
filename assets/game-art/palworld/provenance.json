@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "gameId": "palworld",
+  "role": "top-hero",
+  "file": "hero.webp",
+  "sourceKind": "generated-original",
+  "generator": {
+    "provider": "OpenAI",
+    "model": "gpt-image-2-high",
+    "generatedAt": "2026-08-03T23:45:40-04:00"
+  },
+  "rights": {
+    "licenseSpdx": "CC0-1.0",
+    "repoPackagingRecommendation": "allow",
+    "basis": "Original prompt with no third-party source image; visually reviewed before packaging.",
+    "termsUrl": "https://openai.com/policies/row-terms-of-use/"
+  },
+  "assignment": {
+    "displayGame": "Palworld",
+    "embeddedGameIp": false,
+    "method": "Associated with Palworld only through surrounding factual UI text."
+  },
+  "visualReview": {
+    "reviewed": true,
+    "result": "pass",
+    "checks": [
+      "no people or creatures",
+      "no recognizable game characters",
+      "no logos or trademarks",
+      "no accidental text",
+      "no franchise-specific motifs",
+      "quiet dark left region supports UI text",
+      "focal outpost remains on the right"
+    ]
+  },
+  "sourcePrompt": "Create an original, non-derivative landscape banner for a self-hosted game server dashboard: a remote survival outpost on a fantastical archipelago, with a quiet dark left region for interface text and the focal outpost on the right. No people, animals, monsters, weapons, logos, typography, trademarks, UI, recognizable characters, or franchise-specific motifs."
+}

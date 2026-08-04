@@ -26,6 +26,9 @@ if [[ -d "$LEGACY_DISABLED_TARGET" ]]; then
 fi
 
 mkdir -p "$BACKEND_TARGET/dist" "$BACKEND_TARGET/web" "$DESKTOP_TARGET"
+rm -rf -- "$BACKEND_TARGET/art"
+mkdir -p "$BACKEND_TARGET/art"
+cp -a "$ROOT/assets/game-art/." "$BACKEND_TARGET/art/"
 cp "$ROOT/hermes-plugin/plugin.yaml" "$(dirname "$BACKEND_TARGET")/plugin.yaml"
 cp "$ROOT/hermes-plugin/dashboard/manifest.json" "$BACKEND_TARGET/manifest.json"
 cp "$ROOT/hermes-plugin/dashboard/plugin_api.py" "$BACKEND_TARGET/plugin_api.py"
