@@ -18,7 +18,8 @@
 - **Backup & diagnostics endpoints** — wired the previously-dormant `backups.py` + `diagnostics.py` modules:
   - `GET  /api/backups/<gameId>` — verified artifact inventory
   - `POST /api/backups/<gameId>/create` — one verified `.tar.gz` of the game's approved source
-  - `POST /api/backups/<gameId>/restore/preview` — read-only restore preview + confirmation token (restore *execute* stays unwired by design)
+  - `POST /api/backups/<gameId>/restore/preview` — read-only restore preview + confirmation token
+  - `POST /api/backups/<gameId>/restore` — execute restore (requires server STOPPED + exact confirmation token from preview; creates verified safety backup first, atomic rollback on failure)
   - `GET  /api/diagnostics/<gameId>/logs` — approved log ids for the game
   - `GET  /api/diagnostics/<gameId>/logs/<logId>` — bounded, IP-redacted tail (`?redact=false` to opt out)
   - `GET  /api/diagnostics/<gameId>/bundle` — redacted diagnostics bundle
