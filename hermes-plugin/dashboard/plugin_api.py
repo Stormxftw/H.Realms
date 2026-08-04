@@ -50,8 +50,19 @@ PROXY_RULES = {
     ("POST", "api/store/uninstall"): ProxyRule("api/bridge/store/uninstall", MAX_BODY, 262_144),
 }
 DYNAMIC_PROXY_RULES = (
-    ("GET", re.compile(r"api/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}"), 524_288),
-
+    ("GET", re.compile(r"api/operations/[A-Za-z0-9][A-Za-z0-9_-]{0,127}"), 0, 524_288),
+    ("GET", re.compile(r"api/backups/[a-z0-9][a-z0-9-]{0,63}"), 0, MAX_RESPONSE),
+    ("POST", re.compile(r"api/backups/[a-z0-9][a-z0-9-]{0,63}/create"), MAX_BODY, 262_144),
+    ("POST", re.compile(r"api/backups/[a-z0-9][a-z0-9-]{0,63}/restore/preview"), MAX_BODY, 262_144),
+    ("POST", re.compile(r"api/backups/[a-z0-9][a-z0-9-]{0,63}/restore"), MAX_BODY, MAX_RESPONSE),
+    ("GET", re.compile(r"api/diagnostics/[a-z0-9][a-z0-9-]{0,63}/logs"), 0, 262_144),
+    (
+        "GET",
+        re.compile(r"api/diagnostics/[a-z0-9][a-z0-9-]{0,63}/logs/[A-Za-z0-9][A-Za-z0-9_-]{0,63}"),
+        0,
+        MAX_RESPONSE,
+    ),
+    ("GET", re.compile(r"api/diagnostics/[a-z0-9][a-z0-9-]{0,63}/bundle"), 0, MAX_RESPONSE),
 )
 
 
@@ -116,9 +127,9 @@ def _proxy_rule(method: str, path: str) -> ProxyRule:
     rule = PROXY_RULES.get((method, path))
     if rule is not None:
         return rule
-    for allowed_method, pattern, max_response in DYNAMIC_PROXY_RULES:
+    for allowed_method, pattern, max_body, max_response in DYNAMIC_PROXY_RULES:
         if method == allowed_method and pattern.fullmatch(path):
-            return ProxyRule(path, 0, max_response)
+            return ProxyRule(path, max_body, max_response)
     raise HTTPException(status_code=404, detail="Proxy route is not allowed")
 
 
@@ -152,6 +163,15 @@ async def _read_request_body(request: Request, limit: int) -> bytes:
 def _validated_query(path: str, query: dict[str, object] | None) -> str:
     if not query:
         return ""
+    diagnostics_log = re.fullmatch(
+        r"api/diagnostics/[a-z0-9][a-z0-9-]{0,63}/logs/[A-Za-z0-9][A-Za-z0-9_-]{0,63}",
+        path,
+    )
+    if diagnostics_log is not None:
+        redact = query.get("redact")
+        if set(query) != {"redact"} or not isinstance(redact, str) or redact not in {"true", "false"}:
+            raise HTTPException(status_code=400, detail="Invalid proxy query")
+        return "?" + urllib.parse.urlencode({"redact": redact})
     if path != "api/operations" or set(query) - {"limit", "gameId", "state"}:
         raise HTTPException(status_code=400, detail="Invalid proxy query")
     normalized: dict[str, str] = {}

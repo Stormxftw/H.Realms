@@ -11,9 +11,20 @@ assert.match(source, /useQuery/);
 assert.match(source, /useMutation/);
 assert.match(source, /ConfirmDialog/);
 assert.match(source, /ctx\.rest\(['"]\/proxy\/api\/status['"]/);
-// Operation polling is extracted to behavior.mjs and wired through a signal.
-assert.match(source, /waitForOperation\(path => ctx\.rest\(path, \{ timeoutMs: 15_000 \}\), queued, \{ signal: runtime\.signal \}\)/);
-assert.match(source, /from '\.\/behavior\.mjs'/);
+// Desktop plugins are raw, single-file ESM. Only app-provided modules resolve.
+const importedModules = [...source.matchAll(/from\s+['"]([^'"]+)['"]/g)].map(match => match[1]);
+assert.deepEqual(importedModules, ['@hermes/plugin-sdk', 'react', 'react/jsx-runtime']);
+assert.doesNotMatch(source, /from\s+['"]\.\.?\//);
+assert.match(source, /function waitForOperation\(/);
+assert.match(source, /function selectKey\(/);
+assert.match(source, /function numericDraft\(/);
+assert.match(source, /waitForOperation\([\s\S]*ctx\.rest\(path, \{ timeoutMs: 15_000 \}\)[\s\S]*signal: runtime\.signal/);
+assert.match(source, /artifactId/);
+assert.match(source, /requiredConfirmation/);
+assert.match(source, /\/proxy\/api\/backups\/\$\{gameId\}\/restore\/preview/);
+assert.match(source, /\/proxy\/api\/diagnostics\/\$\{selectedGameId\}\/logs/);
+assert.match(source, /\/proxy\/api\/diagnostics\/\$\{game\.id\}\/logs\/\$\{encodeURIComponent\(logId\)\}/);
+assert.doesNotMatch(source, /window\.confirm\(/);
 assert.match(source, /ctx\.onDispose\(\(\) => controller\.abort\(\)\)/);
 assert.match(source, /ctx\.i18n\.register\(\{[\s\S]*gameHost:[\s\S]*openLabel:/);
 assert.match(source, /usePluginI18n\(ID\)/);

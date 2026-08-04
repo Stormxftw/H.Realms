@@ -107,11 +107,18 @@ class PluginApiTests(unittest.TestCase):
             ("GET", "api/store"),
             ("GET", "api/operations"),
             ("GET", "api/operations/op-123"),
+            ("GET", "api/backups/palworld"),
+            ("GET", "api/diagnostics/palworld/logs"),
+            ("GET", "api/diagnostics/palworld/logs/server"),
+            ("GET", "api/diagnostics/palworld/bundle"),
 
             ("POST", "api/control/plan"),
             ("POST", "api/control/apply"),
             ("POST", "api/store/install"),
             ("POST", "api/store/uninstall"),
+            ("POST", "api/backups/palworld/create"),
+            ("POST", "api/backups/palworld/restore/preview"),
+            ("POST", "api/backups/palworld/restore"),
         )
         for method, path in allowed:
             with self.subTest(method=method, path=path):
@@ -154,14 +161,49 @@ class PluginApiTests(unittest.TestCase):
                     module._proxy("GET", "api/operations", query=query)
                 self.assertEqual(400, rejected.exception.status_code)
 
-    def test_diagnostics_routes_are_not_advertised_without_local_handlers(self):
+    def test_diagnostics_redaction_query_is_narrowly_validated(self):
         module = load_plugin_api()
         if module is None:
             self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
-        for path in ("api/diagnostics", "api/diagnostics/minecraft"):
-            with self.assertRaises(module.HTTPException) as rejected:
-                module._proxy_rule("GET", path)
-            self.assertEqual(404, rejected.exception.status_code)
+        path = "api/diagnostics/palworld/logs/server"
+        upstream = UpstreamResponse(b"{}")
+        with mock.patch.object(module.urllib.request, "urlopen", return_value=upstream) as urlopen:
+            module._proxy("GET", path, query={"redact": "true"})
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            "http://127.0.0.1:5057/api/diagnostics/palworld/logs/server?redact=true",
+            request.full_url,
+        )
+
+        for bad_path, query in (
+            (path, {"redact": "yes"}),
+            (path, {"redact": "true", "extra": "x"}),
+            ("api/diagnostics/palworld/logs", {"redact": "true"}),
+            ("api/backups/palworld", {"redact": "true"}),
+        ):
+            with self.subTest(path=bad_path, query=query):
+                with self.assertRaises(module.HTTPException) as rejected:
+                    module._proxy("GET", bad_path, query=query)
+                self.assertEqual(400, rejected.exception.status_code)
+
+    def test_partial_or_malformed_backup_and_diagnostic_routes_are_rejected(self):
+        module = load_plugin_api()
+        if module is None:
+            self.skipTest("plugin API runs in the Hermes venv, which provides FastAPI")
+        rejected_routes = (
+            ("GET", "api/backups"),
+            ("GET", "api/backups/../palworld"),
+            ("GET", "api/diagnostics"),
+            ("GET", "api/diagnostics/palworld"),
+            ("GET", "api/diagnostics/palworld/logs/../secret"),
+            ("POST", "api/backups/palworld"),
+            ("GET", "api/backups/palworld/create"),
+        )
+        for method, path in rejected_routes:
+            with self.subTest(method=method, path=path):
+                with self.assertRaises(module.HTTPException) as rejected:
+                    module._proxy_rule(method, path)
+                self.assertEqual(404, rejected.exception.status_code)
 
     def test_service_origin_rejects_nonlocal_or_ambiguous_overrides_before_upstream(self):
         invalid_origins = (

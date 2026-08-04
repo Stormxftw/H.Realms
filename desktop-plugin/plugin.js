@@ -27,14 +27,107 @@ import {
 } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 import { jsx } from 'react/jsx-runtime'
-import {
-  numericDraft,
-  operationMessage,
-  operationSucceeded,
-  selectKey,
-  selectValue,
-  waitForOperation,
-} from './behavior.mjs'
+
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'outcome_unknown'])
+
+/**
+ * Format a select option value as a stable, type-qualified key.
+ * @param {string | number | boolean} value
+ * @returns {string}
+ */
+function selectKey(value) {
+  const type = typeof value
+  if (!['string', 'number', 'boolean'].includes(type)) throw new TypeError('unsupported select value')
+  return `${type}:${JSON.stringify(value)}`
+}
+
+/**
+ * Resolve a select option value from a type-qualified key.
+ * @param {{ label?: string, value: string | number | boolean }[]} options
+ * @param {string} key
+ * @returns {string | number | boolean | undefined}
+ */
+function selectValue(options, key) {
+  const option = options.find(item => selectKey(item.value) === key)
+  return option?.value
+}
+
+/**
+ * Validate a raw numeric input against a control's min/max/step constraints.
+ * @param {string} raw
+ * @param {{ min?: number, max?: number, step?: number }} control
+ * @returns {{ valid: boolean, value: number | undefined }}
+ */
+function numericDraft(raw, { min, max, step } = {}) {
+  if (typeof raw !== 'string' || raw.trim() === '') return { valid: false, value: undefined }
+  const value = Number(raw)
+  let valid = Number.isFinite(value)
+  if (valid && min !== undefined) valid = value >= min
+  if (valid && max !== undefined) valid = value <= max
+  if (valid && step !== undefined && step > 0) {
+    const base = min ?? 0
+    const quotient = (value - base) / step
+    valid = Math.abs(quotient - Math.round(quotient)) < 1e-9
+  }
+  return { valid, value: valid ? value : undefined }
+}
+
+/**
+ * @typedef {object} PollOperation
+ * @property {string} operationId
+ * @property {string} state
+ * @property {string | null} [output]
+ * @property {string | null} [recoveryNote]
+ */
+/**
+ * @typedef {object} PollOptions
+ * @property {number} [intervalMs]
+ * @property {number} [timeoutMs]
+ * @property {() => number} [now]
+ * @property {(ms: number) => Promise<void>} [sleep]
+ * @property {AbortSignal} [signal]
+ */
+/**
+ * Poll one durable operation until it reaches a terminal state.
+ * @param {(path: string) => Promise<PollOperation>} rest
+ * @param {PollOperation} initial
+ * @param {PollOptions} [options]
+ * @returns {Promise<PollOperation>}
+ */
+async function waitForOperation(rest, initial, options = {}) {
+  const intervalMs = options.intervalMs ?? 750
+  const timeoutMs = options.timeoutMs ?? 300_000
+  const now = options.now ?? Date.now
+  const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
+  const signal = options.signal
+  let operation = initial
+  const deadline = now() + timeoutMs
+  while (!TERMINAL_STATES.has(operation.state)) {
+    if (signal?.aborted) throw new Error('Operation polling cancelled.')
+    if (now() >= deadline) throw new Error(`Operation ${operation.operationId} polling timed out.`)
+    await sleep(Math.min(intervalMs, Math.max(0, deadline - now())))
+    if (signal?.aborted) throw new Error('Operation polling cancelled.')
+    operation = await rest(`/proxy/api/operations/${encodeURIComponent(operation.operationId)}`)
+  }
+  return operation
+}
+
+/**
+ * Build a human-readable message for a terminal operation.
+ * @param {PollOperation} operation
+ * @returns {string}
+ */
+function operationMessage(operation) {
+  return operation.output || operation.recoveryNote || `Operation ${operation.state}.`
+}
+
+/**
+ * @param {PollOperation} operation
+ * @returns {boolean}
+ */
+function operationSucceeded(operation) {
+  return operation.state === 'succeeded'
+}
 
 /** @typedef {string | number | boolean | null | undefined} ControlValue */
 /** @typedef {{ action?: string }} ControlBinding */
@@ -68,8 +161,9 @@ import {
  * @property {string} [description]
  * @property {string} [readiness]
  * @property {boolean} [projectPresent]
- * @property {object[]} [blockers]
- * @property {object[]} [hints]
+ * @property {boolean} [installed]
+ * @property {{ message?: string }[]} [blockers]
+ * @property {{ message?: string }[]} [hints]
  * @property {Control[]} [controls]
  */
 /** @typedef {{ games?: Game[] }} Catalog */
@@ -100,6 +194,11 @@ import {
 /** @typedef {{ gameId: string, controlId: string, value: ControlValue }} PlanRequest */
 /** @typedef {{ operationId: string, state: string, output?: string, recoveryNote?: string }} OperationRecord */
 /** @typedef {{ label: string, detail: string, at: string }} ActivityItem */
+/** @typedef {{ artifactId: string, filename?: string, sizeBytes?: number, validation?: { state?: string, entryCount?: number } }} BackupArtifact */
+/** @typedef {{ previewId: string, artifactId: string, archiveEntries?: string[], requiredConfirmation: string }} RestorePreview */
+/** @typedef {{ state?: string, logId?: string, content?: string }} DiagnosticTail */
+/** @typedef {{ gameId: string, artifactId: string, serverState: string }} RestorePreviewRequest */
+/** @typedef {{ gameId: string, previewId: string, confirmation: string, serverState: string }} RestoreExecuteRequest */
 
 const ID = 'game-host-console'
 const ROUTE = '/game-host'
@@ -376,6 +475,11 @@ function createGameHostPage(ctx, runtime) {
     const [confirmPhrase, setConfirmPhrase] = useState('')
     const [activity, setActivity] = useState(/** @type {ActivityItem[]} */ ([]))
     const [showStore, setShowStore] = useState(false)
+    const [restorePreview, setRestorePreview] = useState(/** @type {RestorePreview | null} */ (null))
+    const [logTail, setLogTail] = useState(/** @type {DiagnosticTail | null} */ (null))
+    const [restoreConfirmToken, setRestoreConfirmToken] = useState('')
+    const [createBackupOpen, setCreateBackupOpen] = useState(false)
+    const [restoreExecuteOpen, setRestoreExecuteOpen] = useState(false)
 
     const statusQuery = useQuery({
       queryKey: [ctx.source, 'status'],
@@ -398,6 +502,57 @@ function createGameHostPage(ctx, runtime) {
       retry: 1,
     })
 
+    const backupsQuery = useQuery({
+      queryKey: [ctx.source, 'backups', selectedGameId],
+      queryFn: () => /** @type {Promise<{ gameId: string, backups: any[] }>} */ (
+        ctx.rest(`/proxy/api/backups/${selectedGameId}`)
+      ),
+      refetchInterval: 60_000,
+      retry: 1,
+      enabled: !!selectedGameId,
+    })
+
+    const diagnosticsQuery = useQuery({
+      queryKey: [ctx.source, 'diagnostics', selectedGameId],
+      queryFn: () => /** @type {Promise<{ gameId: string, logs: Record<string, string> }>} */ (
+        ctx.rest(`/proxy/api/diagnostics/${selectedGameId}/logs`)
+      ),
+      refetchInterval: 120_000,
+      retry: 1,
+      enabled: !!selectedGameId,
+    })
+
+    const createBackupMutation = useMutation({
+      mutationFn: (/** @type {string} */ gameId) => /** @type {Promise<BackupArtifact>} */ (ctx.rest(`/proxy/api/backups/${gameId}/create`, {
+        method: 'POST',
+        body: { label: 'manual' },
+        timeoutMs: 120_000,
+      })),
+    })
+
+    const previewRestoreMutation = useMutation({
+      mutationFn: (/** @type {RestorePreviewRequest} */ { gameId, artifactId, serverState }) => /** @type {Promise<RestorePreview>} */ (ctx.rest(`/proxy/api/backups/${gameId}/restore/preview`, {
+        method: 'POST',
+        body: { artifactId, serverState },
+        timeoutMs: 30_000,
+      })),
+    })
+
+    const executeRestoreMutation = useMutation({
+      mutationFn: (/** @type {RestoreExecuteRequest} */ { gameId, previewId, confirmation, serverState }) => ctx.rest(`/proxy/api/backups/${gameId}/restore`, {
+        method: 'POST',
+        body: { previewId, confirmation, serverState },
+        timeoutMs: 300_000,
+      }),
+    })
+
+    const diagnosticsBundleMutation = useMutation({
+      mutationFn: (/** @type {string} */ gameId) => /** @type {Promise<{ bundle: string }>} */ (ctx.rest(`/proxy/api/diagnostics/${gameId}/bundle`, {
+        method: 'GET',
+        timeoutMs: 30_000,
+      })),
+    })
+
     const planMutation = useMutation({
       mutationFn: (/** @type {PlanRequest} */ body) => /** @type {Promise<ActionPlan>} */ (ctx.rest('/proxy/api/control/plan', {
         method: 'POST',
@@ -412,7 +567,7 @@ function createGameHostPage(ctx, runtime) {
           body: { planId: plan.planId, planDigest: plan.planDigest, confirmed: true, actor: ACTOR },
           timeoutMs: 15_000,
         }))
-        return waitForOperation(path => ctx.rest(path, { timeoutMs: 15_000 }), queued, { signal: runtime.signal })
+        return waitForOperation((/** @type {string} */ path) => ctx.rest(path, { timeoutMs: 15_000 }), queued, { signal: runtime.signal })
       },
     })
     const installMutation = useMutation({
@@ -444,6 +599,10 @@ function createGameHostPage(ctx, runtime) {
     /** @param {string} gameId */
     function selectGame(gameId) {
       setSelectedGameId(gameId)
+      setRestorePreview(null)
+      setRestoreConfirmToken('')
+      setRestoreExecuteOpen(false)
+      setLogTail(null)
       ctx.storage.set('selectedGame', gameId)
     }
 
@@ -469,7 +628,13 @@ function createGameHostPage(ctx, runtime) {
         queryClient.invalidateQueries({ queryKey: [ctx.source, 'status'] }),
         queryClient.invalidateQueries({ queryKey: [ctx.source, 'catalog'] }),
         queryClient.invalidateQueries({ queryKey: [ctx.source, 'store'] }),
+        queryClient.invalidateQueries({ queryKey: [ctx.source, 'backups', selectedGameId] }),
+        queryClient.invalidateQueries({ queryKey: [ctx.source, 'diagnostics', selectedGameId] }),
       ])
+      setRestorePreview(null)
+      setRestoreConfirmToken('')
+      setRestoreExecuteOpen(false)
+      setLogTail(null)
       if (showToast) host.notify({ kind: 'success', message: 'Game server state refreshed.' })
     }
 
@@ -500,6 +665,7 @@ function createGameHostPage(ctx, runtime) {
 
     /** @param {Control} control @param {ControlValue} value */
     async function preview(control, value) {
+      if (!game) return
       try {
         const plan = await planMutation.mutateAsync({
           gameId: game.id,
@@ -537,6 +703,90 @@ function createGameHostPage(ctx, runtime) {
         throw error
       }
       host.notify({ kind: 'success', message: `${pendingPlan.controlLabel} completed.` })
+    }
+
+    async function confirmCreateBackup() {
+      if (!game) return
+      setCreateBackupOpen(false)
+      try {
+        await createBackupMutation.mutateAsync(game.id)
+        host.notify({ kind: 'success', message: `Backup created for ${game.name}.` })
+        await queryClient.invalidateQueries({ queryKey: [ctx.source, 'backups', game.id] })
+      } catch (error) {
+        host.notifyError(error, 'Create backup failed')
+      }
+    }
+
+    /** @param {{ artifactId?: string }} backup */
+    async function handlePreviewRestoreFor(backup) {
+      if (!game || !backup.artifactId) return
+      if (online) {
+        host.notify({ kind: 'info', message: `Stop ${game.name} before previewing a restore.` })
+        return
+      }
+      try {
+        const preview = await previewRestoreMutation.mutateAsync({
+          gameId: game.id,
+          artifactId: backup.artifactId,
+          serverState: 'stopped',
+        })
+        setRestorePreview(preview)
+        setRestoreConfirmToken('')
+        setRestoreExecuteOpen(false)
+        host.notify({ kind: 'info', message: `Restore preview ready for ${backup.artifactId}.` })
+      } catch (error) {
+        host.notifyError(error, 'Restore preview failed')
+      }
+    }
+
+    async function confirmExecuteRestore() {
+      if (!game || !restorePreview?.previewId) return
+      if (online) {
+        setRestoreExecuteOpen(false)
+        host.notify({ kind: 'info', message: `Stop ${game.name} before restoring a backup.` })
+        return
+      }
+      if (restoreConfirmToken !== restorePreview.requiredConfirmation) {
+        host.notify({ kind: 'info', message: 'The confirmation phrase does not match the restore preview.' })
+        return
+      }
+      try {
+        await executeRestoreMutation.mutateAsync({
+          gameId: game.id,
+          previewId: restorePreview.previewId,
+          confirmation: restoreConfirmToken,
+          serverState: 'stopped',
+        })
+        setRestoreExecuteOpen(false)
+        setRestorePreview(null)
+        setRestoreConfirmToken('')
+        host.notify({ kind: 'success', message: 'Restore completed and a safety backup was created.' })
+        await queryClient.invalidateQueries({ queryKey: [ctx.source, 'backups', game.id] })
+      } catch (error) {
+        host.notifyError(error, 'Restore execute failed')
+      }
+    }
+
+    /** @param {string} logId */
+    async function handleLogTail(logId) {
+      if (!game) return
+      try {
+        const tail = await ctx.rest(`/proxy/api/diagnostics/${game.id}/logs/${encodeURIComponent(logId)}?redact=true`)
+        setLogTail(tail)
+      } catch (error) {
+        host.notifyError(error, 'Log tail failed')
+      }
+    }
+
+    async function handleBundle() {
+      if (!game) return
+      try {
+        const result = await diagnosticsBundleMutation.mutateAsync(game.id)
+        setLogTail({ state: 'ok', logId: 'diagnostics-bundle', content: result.bundle })
+        host.notify({ kind: 'success', message: 'Redacted diagnostics bundle generated.' })
+      } catch (error) {
+        host.notifyError(error, 'Bundle generation failed')
+      }
     }
 
     if (statusQuery.isLoading || catalogQuery.isLoading) {
@@ -712,6 +962,17 @@ function createGameHostPage(ctx, runtime) {
       })
     }
 
+    if (!game || !presentation) {
+      return jsx('div', {
+        className: 'grid h-full place-items-center p-6',
+        children: jsx(ErrorState, {
+          title: 'Server selection unavailable',
+          description: 'Refresh the catalog or choose an installed server.',
+          children: jsx(Button, { onClick: () => refreshAll(false), children: 'Refresh' }),
+        }),
+      })
+    }
+
     const content = jsx(ScrollArea, {
       className: 'h-full min-h-0',
       children: jsx('main', {
@@ -795,6 +1056,152 @@ function createGameHostPage(ctx, runtime) {
               }, 'controls'),
             ],
           }, name)),
+
+                    // === Backups (simplified but wired) ===
+          jsx('section', {
+            className: 'mt-6',
+            style: { ...panelStyle, padding: '16px' },
+            children: [
+              jsx('div', {
+                className: 'flex items-center justify-between mb-2',
+                children: [
+                  jsx('h2', { className: 'text-sm font-semibold', children: 'Backups' }),
+                  jsx(Button, {
+                    disabled: createBackupMutation.isPending || !game,
+                    onClick: () => setCreateBackupOpen(true),
+                    size: 'sm',
+                    variant: 'secondary',
+                    children: createBackupMutation.isPending ? 'Creating…' : 'Create backup',
+                  }, 'create'),
+                ],
+              }),
+              backupsQuery.isError
+                ? jsx('p', { className: 'mt-2 text-xs text-muted-foreground', children: backupsQuery.error instanceof Error ? backupsQuery.error.message : 'Backups are unavailable for this game.' }, 'error')
+                : backupsQuery.isLoading
+                  ? jsx('p', { className: 'mt-2 text-xs text-muted-foreground', children: 'Loading backups…' }, 'loading')
+                  : (!backupsQuery.data?.backups || backupsQuery.data.backups.length === 0)
+                    ? jsx('p', { className: 'mt-2 text-xs text-muted-foreground', children: 'No backups for this game yet.' }, 'empty')
+                    : jsx('div', {
+                  className: 'mt-3 grid gap-2',
+                  children: backupsQuery.data.backups.map((/** @type {any} */ backup) => {
+                    const sizeMB = Number.isFinite(backup.sizeBytes)
+                      ? `${Math.max(0.01, backup.sizeBytes / 1024 / 1024).toFixed(2)} MB`
+                      : 'Unknown size'
+                    const validation = backup.validation?.state || 'unknown'
+                    const entries = backup.validation?.entryCount
+                    return jsx('div', {
+                      className: 'flex items-center justify-between gap-3 p-3',
+                      style: panelStyle,
+                      children: [
+                        jsx('div', {
+                          className: 'min-w-0',
+                          children: [
+                            jsx('div', { className: 'truncate text-xs font-medium', title: backup.artifactId, children: backup.filename || backup.artifactId }, 'name'),
+                            jsx('div', {
+                              className: 'mt-1 text-xs text-muted-foreground',
+                              children: `${sizeMB} · ${validation}${Number.isFinite(entries) ? ` · ${entries} entries` : ''}`,
+                            }, 'meta'),
+                          ],
+                        }, 'copy'),
+                        jsx(Button, {
+                          disabled: online || previewRestoreMutation.isPending,
+                          onClick: () => handlePreviewRestoreFor(backup),
+                          size: 'sm',
+                          variant: 'ghost',
+                          children: online ? 'Stop to restore' : 'Preview restore',
+                        }, 'preview'),
+                      ],
+                    }, backup.artifactId)
+                  }),
+                }),
+              restorePreview ? jsx('div', {
+                className: 'mt-3 grid gap-3 p-3',
+                style: panelStyle,
+                children: [
+                  jsx('div', {
+                    children: [
+                      jsx('div', { className: 'text-xs font-medium', children: `Restore preview: ${restorePreview.artifactId}` }, 'title'),
+                      jsx('div', { className: 'mt-1 text-xs text-muted-foreground', children: `${restorePreview.archiveEntries?.length || 0} archive entries will be restored. The server must remain stopped.` }, 'summary'),
+                    ],
+                  }, 'copy'),
+                  jsx('code', { className: 'break-all text-xs text-muted-foreground', children: restorePreview.requiredConfirmation }, 'required'),
+                  jsx('div', {
+                    className: 'flex gap-2',
+                    children: [
+                      jsx(Input, {
+                        autoComplete: 'off',
+                        className: 'flex-1 text-xs',
+                        onChange: (/** @type {import('react').ChangeEvent<HTMLInputElement>} */ event) => setRestoreConfirmToken(event.target.value),
+                        placeholder: 'Type the exact confirmation phrase',
+                        value: restoreConfirmToken,
+                      }, 'token'),
+                      jsx(Button, {
+                        disabled: executeRestoreMutation.isPending || restoreConfirmToken !== restorePreview.requiredConfirmation,
+                        onClick: () => setRestoreExecuteOpen(true),
+                        size: 'sm',
+                        variant: 'destructive',
+                        children: executeRestoreMutation.isPending ? 'Restoring…' : 'Review restore',
+                      }, 'execute'),
+                    ],
+                  }, 'actions'),
+                ],
+              }, 'restore-preview') : null,
+            ],
+          }, 'backups'),
+
+          jsx('section', {
+            className: 'mt-6 mb-8',
+            style: { ...panelStyle, padding: '16px' },
+            children: [
+              jsx('div', {
+                className: 'flex items-center justify-between gap-3',
+                children: [
+                  jsx('div', {
+                    children: [
+                      jsx('h2', { className: 'text-sm font-semibold', children: 'Diagnostics & logs' }, 'title'),
+                      jsx('p', { className: 'mt-1 text-xs text-muted-foreground', children: 'Bounded, redacted output from approved server logs.' }, 'description'),
+                    ],
+                  }, 'copy'),
+                  jsx(Button, {
+                    disabled: diagnosticsBundleMutation.isPending,
+                    onClick: handleBundle,
+                    size: 'sm',
+                    variant: 'secondary',
+                    children: diagnosticsBundleMutation.isPending ? 'Generating…' : 'Generate bundle',
+                  }, 'bundle'),
+                ],
+              }, 'header'),
+              diagnosticsQuery.isError
+                ? jsx('p', { className: 'mt-3 text-xs text-muted-foreground', children: diagnosticsQuery.error instanceof Error ? diagnosticsQuery.error.message : 'Diagnostics are unavailable for this game.' }, 'error')
+                : diagnosticsQuery.isLoading
+                  ? jsx('p', { className: 'mt-3 text-xs text-muted-foreground', children: 'Loading logs…' }, 'loading')
+                  : (!diagnosticsQuery.data?.logs || Object.keys(diagnosticsQuery.data.logs).length === 0)
+                    ? jsx('p', { className: 'mt-3 text-xs text-muted-foreground', children: 'No approved logs are available.' }, 'empty')
+                    : jsx('div', {
+                        className: 'mt-3 grid gap-2',
+                        children: Object.entries(diagnosticsQuery.data.logs).map(([logId, relativePath]) => jsx('div', {
+                          className: 'flex items-center justify-between gap-3 p-3',
+                          style: panelStyle,
+                          children: [
+                            jsx('div', {
+                              className: 'min-w-0',
+                              children: [
+                                jsx('div', { className: 'text-xs font-medium', children: logId }, 'id'),
+                                jsx('div', { className: 'mt-1 truncate text-xs text-muted-foreground', title: String(relativePath), children: relativePath }, 'path'),
+                              ],
+                            }, 'copy'),
+                            jsx(Button, { onClick: () => handleLogTail(logId), size: 'sm', variant: 'ghost', children: 'View tail' }, 'view'),
+                          ],
+                        }, logId)),
+                      }, 'logs'),
+              logTail ? jsx('pre', {
+                className: 'mt-3 whitespace-pre-wrap break-words p-3 text-xs text-muted-foreground',
+                style: { ...panelStyle, maxHeight: '240px', overflow: 'auto' },
+                children: logTail.content || `No readable text (${logTail.state || 'unknown'}).`,
+              }, 'tail') : null,
+            ],
+          }, 'diagnostics'),
+
           jsx('section', {
             className: 'mt-6 mb-8',
             style: { ...panelStyle, padding: '16px' },
@@ -819,6 +1226,27 @@ function createGameHostPage(ctx, runtime) {
                   }, 'items'),
             ],
           }, 'activity'),
+          jsx(ConfirmDialog, {
+            cancelLabel: 'Cancel',
+            confirmLabel: 'Create backup',
+            onClose: () => setCreateBackupOpen(false),
+            onConfirm: confirmCreateBackup,
+            open: createBackupOpen,
+            title: `Create backup for ${game.name}?`,
+            description: 'The approved save data will be archived and verified before it appears in the inventory.',
+          }, 'backup-confirm'),
+          jsx(ConfirmDialog, {
+            cancelLabel: 'Cancel',
+            confirmLabel: 'Restore backup',
+            destructive: true,
+            onClose: () => setRestoreExecuteOpen(false),
+            onConfirm: confirmExecuteRestore,
+            open: restoreExecuteOpen,
+            title: 'Final restore confirmation',
+            description: restorePreview
+              ? `Restore ${restorePreview.artifactId}? Live save data will be replaced after a verified safety backup is created.`
+              : '',
+          }, 'restore-confirm'),
           jsx(ConfirmDialog, {
             cancelLabel: 'Cancel',
             confirmLabel: pendingPlan?.risk === 'disruptive' ? 'Confirm and run' : 'Apply change',
