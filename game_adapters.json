@@ -5,10 +5,34 @@
     "minecraft": {
       "projectDir": "minecraft-server",
       "commands": {
-        "service.start": [["start.sh", 60]],
-        "service.stop": [["stop.sh", 120]],
-        "service.restart": [["stop.sh", 120], ["start.sh", 60]],
-        "backup.create": [["backup.sh", 300]]
+        "service.start": [
+          [
+            "start.sh",
+            60
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            120
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            120
+          ],
+          [
+            "start.sh",
+            60
+          ]
+        ],
+        "backup.create": [
+          [
+            "backup.sh",
+            300
+          ]
+        ]
       },
       "propertyTypes": {
         "difficulty": "string",
@@ -22,17 +46,48 @@
       "defaultPort": 25565,
       "portProtocol": "tcp",
       "requiredPaths": [
-        {"path": "server.jar", "kind": "binary", "type": "file"},
-        {"path": "server.properties", "kind": "config", "type": "file"},
-        {"path": "world", "kind": "world", "type": "directory"}
+        {
+          "path": "server.jar",
+          "kind": "binary",
+          "type": "file"
+        },
+        {
+          "path": "server.properties",
+          "kind": "config",
+          "type": "file"
+        },
+        {
+          "path": "world",
+          "kind": "world",
+          "type": "directory"
+        }
       ]
     },
     "palworld": {
       "projectDir": "palworld-server-local",
       "commands": {
-        "service.start": [["scripts/palworld-linux-start.sh", 60]],
-        "service.stop": [["scripts/palworld-linux-stop.sh", 120]],
-        "service.restart": [["scripts/palworld-linux-stop.sh", 120], ["scripts/palworld-linux-start.sh", 60]]
+        "service.start": [
+          [
+            "scripts/palworld-linux-start.sh",
+            60
+          ]
+        ],
+        "service.stop": [
+          [
+            "scripts/palworld-linux-stop.sh",
+            120
+          ]
+        ],
+        "service.restart": [
+          [
+            "scripts/palworld-linux-stop.sh",
+            120
+          ],
+          [
+            "scripts/palworld-linux-start.sh",
+            60
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "palworld_rest",
@@ -41,20 +96,60 @@
       "portProtocol": "udp",
       "restPort": 8212,
       "additionalPorts": [
-        {"name": "query", "port": 27015, "protocol": "udp"}
+        {
+          "name": "query",
+          "port": 27015,
+          "protocol": "udp"
+        }
       ],
       "requiredPaths": [
-        {"path": "Pal/Binaries/Linux/PalServer-Linux-Shipping", "kind": "binary", "type": "file"},
-        {"path": "Pal/Saved/Config/LinuxServer/PalWorldSettings.ini", "kind": "config", "type": "file"},
-        {"path": "Pal/Saved/SaveGames", "kind": "save", "type": "directory"}
-      ]
+        {
+          "path": "Pal/Binaries/Linux/PalServer-Linux-Shipping",
+          "kind": "binary",
+          "type": "file"
+        },
+        {
+          "path": "Pal/Saved/Config/LinuxServer/PalWorldSettings.ini",
+          "kind": "config",
+          "type": "file"
+        },
+        {
+          "path": "Pal/Saved/SaveGames",
+          "kind": "save",
+          "type": "directory"
+        }
+      ],
+      "backup": {
+        "projectDir": "/run/media/zim/a drive/GameServers/PalworldServerLinux",
+        "sourceDir": "Pal/Saved",
+        "backupDir": "backups"
+      }
     },
     "valheim": {
       "projectDir": "valheim-server",
       "commands": {
-        "service.start": [["start.sh", 120]],
-        "service.stop": [["stop.sh", 60]],
-        "service.restart": [["stop.sh", 60], ["start.sh", 120]]
+        "service.start": [
+          [
+            "start.sh",
+            120
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            60
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            60
+          ],
+          [
+            "start.sh",
+            120
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "steam_query",
@@ -63,7 +158,11 @@
       "portProtocol": "udp",
       "queryPort": 2457,
       "additionalPorts": [
-        {"name": "query", "port": 2457, "protocol": "udp"}
+        {
+          "name": "query",
+          "port": 2457,
+          "protocol": "udp"
+        }
       ],
       "steamAppId": 896660,
       "notes": "SteamCMD anonymous login supported. World name and password in start.sh."
@@ -71,9 +170,28 @@
     "cs2": {
       "projectDir": "cs2-server",
       "commands": {
-        "service.start": [["start.sh", 120]],
-        "service.stop": [["stop.sh", 60]],
-        "service.restart": [["stop.sh", 60], ["start.sh", 120]]
+        "service.start": [
+          [
+            "start.sh",
+            120
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            60
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            60
+          ],
+          [
+            "start.sh",
+            120
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "steam_query",
@@ -86,9 +204,28 @@
     "terraria": {
       "projectDir": "terraria-server",
       "commands": {
-        "service.start": [["start.sh", 120]],
-        "service.stop": [["stop.sh", 60]],
-        "service.restart": [["stop.sh", 60], ["start.sh", 120]]
+        "service.start": [
+          [
+            "start.sh",
+            120
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            60
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            60
+          ],
+          [
+            "start.sh",
+            120
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "process_only",
@@ -100,9 +237,28 @@
     "dont-starve-together": {
       "projectDir": "dst-server",
       "commands": {
-        "service.start": [["start.sh", 180]],
-        "service.stop": [["stop.sh", 60]],
-        "service.restart": [["stop.sh", 60], ["start.sh", 180]]
+        "service.start": [
+          [
+            "start.sh",
+            180
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            60
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            60
+          ],
+          [
+            "start.sh",
+            180
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "process_only",
@@ -115,9 +271,28 @@
     "satisfactory": {
       "projectDir": "satisfactory-server",
       "commands": {
-        "service.start": [["start.sh", 180]],
-        "service.stop": [["stop.sh", 120]],
-        "service.restart": [["stop.sh", 120], ["start.sh", 180]]
+        "service.start": [
+          [
+            "start.sh",
+            180
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            120
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            120
+          ],
+          [
+            "start.sh",
+            180
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "process_only",
@@ -130,9 +305,28 @@
     "enshrouded": {
       "projectDir": "enshrouded-server",
       "commands": {
-        "service.start": [["start.sh", 180]],
-        "service.stop": [["stop.sh", 60]],
-        "service.restart": [["stop.sh", 60], ["start.sh", 180]]
+        "service.start": [
+          [
+            "start.sh",
+            180
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            60
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            60
+          ],
+          [
+            "start.sh",
+            180
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "steam_query",
@@ -141,7 +335,11 @@
       "portProtocol": "udp",
       "queryPort": 15637,
       "additionalPorts": [
-        {"name": "query", "port": 15637, "protocol": "udp"}
+        {
+          "name": "query",
+          "port": 15637,
+          "protocol": "udp"
+        }
       ],
       "steamAppId": 2278520,
       "notes": "SteamCMD anonymous login supported. Uses UE5, needs decent hardware. Query port is game port + 1."
@@ -149,9 +347,28 @@
     "sons-of-the-forest": {
       "projectDir": "sotf-server",
       "commands": {
-        "service.start": [["start.sh", 120]],
-        "service.stop": [["stop.sh", 60]],
-        "service.restart": [["stop.sh", 60], ["start.sh", 120]]
+        "service.start": [
+          [
+            "start.sh",
+            120
+          ]
+        ],
+        "service.stop": [
+          [
+            "stop.sh",
+            60
+          ]
+        ],
+        "service.restart": [
+          [
+            "stop.sh",
+            60
+          ],
+          [
+            "start.sh",
+            120
+          ]
+        ]
       },
       "propertyTypes": {},
       "statusCollector": "steam_query",
@@ -160,7 +377,11 @@
       "portProtocol": "udp",
       "queryPort": 8769,
       "additionalPorts": [
-        {"name": "query", "port": 8769, "protocol": "udp"}
+        {
+          "name": "query",
+          "port": 8769,
+          "protocol": "udp"
+        }
       ],
       "steamAppId": 2465200,
       "notes": "SteamCMD anonymous login supported. Query port is game port + 3."

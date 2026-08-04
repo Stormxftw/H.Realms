@@ -1,7 +1,7 @@
 # Hermes Game Host Console Status
 
-- Status: **Working MVP — Installed/Store model + accurate live status**
-- Latest verification: `2026-08-03 EDT` — health check: backend under systemd, full suite green (167 passed, 184 subtests)
+- Status: **Working MVP — Installed/Store model + accurate live status + live player counts + backup & diagnostics endpoints**
+- Latest verification: `2026-08-03 EDT` — wired `backups.py` + `diagnostics.py` as guarded endpoints; real Palworld backup created (118 MB, 567 entries, valid); full suite green (189 passed, 184 subtests)
 - Product/add-on name: `Hermes Game Host Console`
 - Version: backend `HermesGameHostConsole/0.4`, plugin `0.3.0`
 - Port: `5057` (loopback only by default)
@@ -14,7 +14,15 @@
 - Live local console with **9 supported game profiles** (Minecraft, Palworld, Valheim, CS2, Terraria, Don't Starve Together, Satisfactory, Enshrouded, Sons of the Forest)
 - **Installed vs Store model** — the sidebar shows only games you have *installed*; the rest live in the **Store** until you add them (from the Store UI or via the Hermes `game-host-console` skill). Seeded on first run from what is present/running.
 - **Accurate live status** — a running process whose listeners are listening reports `RUNNING`, even if setup blockers are pending (setup gates *mutations*, not runtime health)
-- **Player counts** — Minecraft, Source (A2S) and Palworld REST show live `players`; Palworld shows real counts once its REST API is enabled
+- **Player counts** — Minecraft, Source (A2S) and Palworld REST show live `players`; Palworld reads its authenticated REST API (`RESTAPIEnabled=True` on 8212), resolving the AdminPassword + ServerPlayerMaxNum from `PalWorldSettings.ini` via `/proc/<pid>/cwd`
+- **Backup & diagnostics endpoints** — wired the previously-dormant `backups.py` + `diagnostics.py` modules:
+  - `GET  /api/backups/<gameId>` — verified artifact inventory
+  - `POST /api/backups/<gameId>/create` — one verified `.tar.gz` of the game's approved source
+  - `POST /api/backups/<gameId>/restore/preview` — read-only restore preview + confirmation token (restore *execute* stays unwired by design)
+  - `GET  /api/diagnostics/<gameId>/logs` — approved log ids for the game
+  - `GET  /api/diagnostics/<gameId>/logs/<logId>` — bounded, IP-redacted tail (`?redact=false` to opt out)
+  - `GET  /api/diagnostics/<gameId>/bundle` — redacted diagnostics bundle
+  - Games whose live data lives outside the console projectDir (e.g. Palworld) declare a `backup` block in `game_adapters.json` (`projectDir`/`sourceDir`/`backupDir`) — the manager confines within that external root
 - Closed control kinds: button, switch, slider, select, text, number, readonly
 - Declarative profiles in `game_profiles/*.json` (no executable code in profiles)
 - **Data-driven adapter mapping** in `game_adapters.json` — adding a new game no longer requires edits to `control_engine.py`

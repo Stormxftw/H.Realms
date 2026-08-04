@@ -27,6 +27,8 @@ from control_engine import (
 from operations import OperationStore
 from restart_state import RestartStateStore
 from store import InstalledStore
+import app_backups
+import app_diagnostics
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -430,8 +432,75 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_file(
                     STATIC / "app.js", "application/javascript; charset=utf-8"
                 )
+            elif (
+                match := re.fullmatch(
+                    r"/api/diagnostics/([a-z0-9][a-z0-9-]{0,63})/logs", path
+                )
+            ):
+                self.send_json(
+                    200,
+                    app_diagnostics.list_diagnostics_logs(
+                        self.control_engine, match.group(1)
+                    ),
+                )
+            elif (
+                match := re.fullmatch(
+                    r"/api/diagnostics/([a-z0-9][a-z0-9-]{0,63})/logs/([A-Za-z0-9][A-Za-z0-9_-]{0,63})",
+                    path,
+                )
+            ):
+                query = urllib.parse.parse_qs(
+                    parsed.query, keep_blank_values=True, strict_parsing=True
+                )
+                unknown = set(query) - {"redact"}
+                if unknown or any(len(values) != 1 for values in query.values()):
+                    raise ControlEngineError("invalid diagnostics query")
+                redact_raw = query.get("redact", ["true"])[0].lower()
+                if redact_raw not in ("true", "false"):
+                    raise ControlEngineError("redact must be true or false")
+                self.send_json(
+                    200,
+                    app_diagnostics.diagnostics_log_tail(
+                        self.control_engine,
+                        match.group(1),
+                        match.group(2),
+                        redact_ips=(redact_raw == "true"),
+                    ),
+                )
+            elif (
+                match := re.fullmatch(
+                    r"/api/diagnostics/([a-z0-9][a-z0-9-]{0,63})/bundle", path
+                )
+            ):
+                bundle = app_diagnostics.diagnostics_bundle(
+                    self.control_engine,
+                    match.group(1),
+                    version=self.control_engine.catalog().get("schemaVersion", "1.0"),
+                )
+                self.send_json(
+                    200,
+                    {
+                        "gameId": match.group(1),
+                        "bundle": bundle,
+                        "generatedAt": iso(),
+                    },
+                )
+            elif (
+                match := re.fullmatch(r"/api/backups/([a-z0-9][a-z0-9-]{0,63})", path)
+            ):
+                self.send_json(
+                    200,
+                    app_backups.list_backups(self.control_engine, match.group(1)),
+                )
             else:
                 self.send_json(404, {"error": "not found"})
+        except (
+            app_diagnostics.DiagnosticsNotFoundError,
+            app_backups.BackupNotFoundError,
+        ) as exc:
+            self.send_json(404, {"error": str(exc), "generatedAt": iso()})
+        except app_backups.BackupOperationError as exc:
+            self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except ControlEngineError as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
@@ -508,6 +577,34 @@ class Handler(BaseHTTPRequestHandler):
                         "generatedAt": iso(),
                     },
                 )
+            elif (
+                match := re.fullmatch(
+                    r"/api/backups/([a-z0-9][a-z0-9-]{0,63})/create", self.path
+                )
+            ):
+                label = str(body.get("label", "manual"))
+                self.send_json(
+                    200,
+                    app_backups.create_backup(
+                        self.control_engine, match.group(1), label=label
+                    ),
+                )
+            elif (
+                match := re.fullmatch(
+                    r"/api/backups/([a-z0-9][a-z0-9-]{0,63})/restore/preview", self.path
+                )
+            ):
+                artifact_id = str(body.get("artifactId", ""))
+                server_state = str(body.get("serverState", "stopped"))
+                self.send_json(
+                    200,
+                    app_backups.preview_restore(
+                        self.control_engine,
+                        match.group(1),
+                        artifact_id,
+                        server_state=server_state,
+                    ),
+                )
             else:
                 self.send_json(404, {"error": "not found"})
         except OperationConflictError as exc:
@@ -519,6 +616,13 @@ class Handler(BaseHTTPRequestHandler):
                     "generatedAt": iso(),
                 },
             )
+        except (
+            app_diagnostics.DiagnosticsNotFoundError,
+            app_backups.BackupNotFoundError,
+        ) as exc:
+            self.send_json(404, {"error": str(exc), "generatedAt": iso()})
+        except app_backups.BackupOperationError as exc:
+            self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except (ControlEngineError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc), "generatedAt": iso()})
         except Exception as exc:
