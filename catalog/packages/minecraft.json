@@ -1,0 +1,228 @@
+{
+  "adapter": {
+    "commands": {
+      "backup.create": [
+        [
+          "backup.sh",
+          300
+        ]
+      ],
+      "service.restart": [
+        [
+          "stop.sh",
+          120
+        ],
+        [
+          "start.sh",
+          60
+        ]
+      ],
+      "service.start": [
+        [
+          "start.sh",
+          60
+        ]
+      ],
+      "service.stop": [
+        [
+          "stop.sh",
+          120
+        ]
+      ]
+    },
+    "defaultPort": 25565,
+    "portProtocol": "tcp",
+    "processSearch": "server.jar nogui",
+    "projectDir": "minecraft-server",
+    "propertyTypes": {
+      "difficulty": "string",
+      "max-players": "integer",
+      "motd": "string",
+      "view-distance": "integer",
+      "white-list": "boolean"
+    },
+    "requiredPaths": [
+      {
+        "kind": "binary",
+        "path": "server.jar",
+        "type": "file"
+      },
+      {
+        "kind": "config",
+        "path": "server.properties",
+        "type": "file"
+      },
+      {
+        "kind": "world",
+        "path": "world",
+        "type": "directory"
+      }
+    ],
+    "statusCollector": "minecraft_ping"
+  },
+  "id": "minecraft",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Gracefully saves the world and stops the server.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "backup.create"
+        },
+        "group": "Operations",
+        "help": "Flushes the world, creates a compressed backup, and keeps the configured retention count.",
+        "id": "backup-now",
+        "kind": "button",
+        "label": "Create backup",
+        "risk": "safe-mutation",
+        "variant": "secondary"
+      },
+      {
+        "binding": {
+          "action": "property.set",
+          "key": "difficulty"
+        },
+        "group": "Gameplay",
+        "id": "difficulty",
+        "kind": "select",
+        "label": "Difficulty",
+        "options": [
+          {
+            "label": "Peaceful",
+            "value": "peaceful"
+          },
+          {
+            "label": "Easy",
+            "value": "easy"
+          },
+          {
+            "label": "Normal",
+            "value": "normal"
+          },
+          {
+            "label": "Hard",
+            "value": "hard"
+          }
+        ],
+        "restartRequired": true,
+        "risk": "configuration"
+      },
+      {
+        "binding": {
+          "action": "property.set",
+          "key": "max-players"
+        },
+        "group": "Capacity",
+        "id": "max-players",
+        "kind": "slider",
+        "label": "Maximum players",
+        "max": 50,
+        "min": 1,
+        "restartRequired": true,
+        "risk": "configuration",
+        "step": 1,
+        "unit": "players"
+      },
+      {
+        "binding": {
+          "action": "property.set",
+          "key": "view-distance"
+        },
+        "group": "Capacity",
+        "help": "Higher values increase CPU, memory, and network load.",
+        "id": "view-distance",
+        "kind": "slider",
+        "label": "View distance",
+        "max": 24,
+        "min": 2,
+        "restartRequired": true,
+        "risk": "configuration",
+        "step": 1,
+        "unit": "chunks"
+      },
+      {
+        "binding": {
+          "action": "property.set",
+          "key": "white-list"
+        },
+        "group": "Access",
+        "help": "Keep enabled unless you deliberately want a public server.",
+        "id": "whitelist",
+        "kind": "switch",
+        "label": "Require whitelist",
+        "restartRequired": true,
+        "risk": "configuration"
+      },
+      {
+        "binding": {
+          "action": "property.set",
+          "key": "motd"
+        },
+        "group": "Identity",
+        "id": "motd",
+        "kind": "text",
+        "label": "Server message",
+        "maxLength": 120,
+        "restartRequired": true,
+        "risk": "configuration"
+      }
+    ],
+    "description": "Fabric server controls. Every mutation is previewed, confirmed, audited, and reversible where possible.",
+    "icon": "Box",
+    "id": "minecraft",
+    "name": "Minecraft Java",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "sandbox",
+    "survival",
+    "java"
+  ],
+  "version": "1.0.0"
+}

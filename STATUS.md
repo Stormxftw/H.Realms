@@ -1,7 +1,14 @@
 # Hermes Game Host Console Status
 
-- Status: **Working MVP — Desktop loader and authenticated bridge repaired; live controls, backups, diagnostics, telemetry, and repository-packaged game art verified**
-- Latest verification: `2026-08-04 EDT` — Palworld remained `running_ready` with PID `1496192`; Desktop rendered the live hosted-game hero, verified backup and approved diagnostics logs; process telemetry reports uptime and RSS memory; full suite green (**196 passed, 205 subtests**).
+- Status: **Working MVP — GitHub-backed verified profile Store, Desktop controls, backups, diagnostics, telemetry, and repository-packaged game art implemented**
+- Latest verification: `2026-08-04 EDT` — profile catalog generation and focused Store/API tests are green; full release verification will be recorded after the feature commit.
+
+## GitHub-backed profile Store (August 2026 update)
+- Canonical community packages live in `catalog/packages/<game-id>.json`; `catalog/index.json` is deterministic and carries package byte sizes and SHA-256 digests.
+- The app refreshes only the pinned official raw-GitHub feed, validates strict profile/adapter schemas and semantic bindings, persists a verified offline cache, and falls back to the bundled catalog when GitHub is unavailable.
+- A verified package install persists only JSON data, creates a confined project home, and activates after one Game Host Console restart. Downloaded profiles cannot embed shell code or escape the project directory.
+- `.github/workflows/profile-catalog.yml` verifies every catalog PR; `CONTRIBUTING.md` and the PR template define evidence, versioning, safety, and artwork requirements.
+- Public community pull requests and unauthenticated raw feed access still require an explicit repository visibility change from private to public.
 
 ## UI Wiring (August 2026 update)
 - Desktop plugin surfaces **Backups** (list, create, preview restore, execute with exact token confirmation) and **Diagnostics** (log list, inline redacted tail with loading/error/binary states, bundle).
@@ -170,7 +177,7 @@ The old hardcoded `_commands_for()` dict is gone. `game_adapters.json` now maps:
 ## Reverse / uninstall
 
 ```bash
-cd "/path/to/h-realms"
+cd /path/to/hermes-game-host-console
 ./uninstall-hermes-plugin.sh
 ./stop.sh
 ```

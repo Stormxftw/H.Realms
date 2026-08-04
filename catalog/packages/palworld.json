@@ -1,0 +1,151 @@
+{
+  "adapter": {
+    "additionalPorts": [
+      {
+        "name": "query",
+        "port": 27015,
+        "protocol": "udp"
+      }
+    ],
+    "backup": {
+      "backupDir": "backups",
+      "projectDir": "palworld-server-local",
+      "sourceDir": "Pal/Saved"
+    },
+    "commands": {
+      "service.restart": [
+        [
+          "scripts/palworld-linux-stop.sh",
+          120
+        ],
+        [
+          "scripts/palworld-linux-start.sh",
+          60
+        ]
+      ],
+      "service.start": [
+        [
+          "scripts/palworld-linux-start.sh",
+          60
+        ]
+      ],
+      "service.stop": [
+        [
+          "scripts/palworld-linux-stop.sh",
+          120
+        ]
+      ]
+    },
+    "defaultPort": 8211,
+    "portProtocol": "udp",
+    "processSearch": "PalServer-Linux-Shipping",
+    "projectDir": "palworld-server-local",
+    "propertyTypes": {},
+    "requiredPaths": [
+      {
+        "kind": "binary",
+        "path": "Pal/Binaries/Linux/PalServer-Linux-Shipping",
+        "type": "file"
+      },
+      {
+        "kind": "config",
+        "path": "Pal/Saved/Config/LinuxServer/PalWorldSettings.ini",
+        "type": "file"
+      },
+      {
+        "kind": "save",
+        "path": "Pal/Saved/SaveGames",
+        "type": "directory"
+      }
+    ],
+    "restPort": 8212,
+    "statusCollector": "palworld_rest"
+  },
+  "id": "palworld",
+  "profile": {
+    "controls": [
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Operations",
+        "id": "refresh",
+        "kind": "button",
+        "label": "Refresh status",
+        "risk": "read-only",
+        "variant": "outline"
+      },
+      {
+        "binding": {
+          "action": "service.start"
+        },
+        "enabledWhen": "offline",
+        "group": "Operations",
+        "id": "start",
+        "kind": "button",
+        "label": "Start server",
+        "risk": "service"
+      },
+      {
+        "binding": {
+          "action": "service.stop"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "help": "Stops the Palworld Linux process. Use only after confirming no players are active.",
+        "id": "stop",
+        "kind": "button",
+        "label": "Stop server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "service.restart"
+        },
+        "enabledWhen": "online",
+        "group": "Operations",
+        "id": "restart",
+        "kind": "button",
+        "label": "Restart server",
+        "risk": "disruptive",
+        "variant": "destructive"
+      },
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Network",
+        "id": "game-port",
+        "kind": "readonly",
+        "label": "Game port",
+        "risk": "read-only",
+        "unit": "UDP",
+        "value": 8211
+      },
+      {
+        "binding": {
+          "action": "ui.refresh"
+        },
+        "group": "Network",
+        "id": "query-port",
+        "kind": "readonly",
+        "label": "Query port",
+        "risk": "read-only",
+        "unit": "UDP",
+        "value": 27015
+      }
+    ],
+    "description": "Linux dedicated-server controls. Live settings remain locked until a typed Palworld settings adapter is added.",
+    "icon": "Gamepad2",
+    "id": "palworld",
+    "name": "Palworld",
+    "schemaVersion": "1.0"
+  },
+  "schemaVersion": 1,
+  "tags": [
+    "survival",
+    "creature-collection"
+  ],
+  "version": "1.0.0"
+}

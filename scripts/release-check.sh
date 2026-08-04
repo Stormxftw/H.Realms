@@ -29,11 +29,15 @@ REQUIRED_RELEASE_ARTIFACTS=(
   operations.py
   restart_state.py
   store.py
+  profile_store.py
   data/schema.sql
   game_adapters.json
   static/index.html
   static/app.css
   static/app.js
+  README.md
+  assets/branding/README.md
+  assets/branding/hermes-game-host-console-banner.webp
   desktop-plugin/plugin.js
   hermes-plugin/plugin.yaml
   hermes-plugin/dashboard/manifest.json
@@ -60,11 +64,25 @@ REQUIRED_RELEASE_ARTIFACTS=(
   tests/test_operations.py
   tests/test_restart_state.py
   tests/test_store_api.py
+  tests/test_profile_store.py
   tests/ui.test.js
   tests/desktop_plugin.test.js
   tests/tsconfig.desktop-plugin.json
+  tests/desktop-plugin-shims.d.ts
   tests/test_release_scaffold.py
   scripts/release-check.sh
+  scripts/build-profile-catalog.py
+  catalog/index.json
+  catalog/packages/cs2.json
+  catalog/packages/dont-starve-together.json
+  catalog/packages/enshrouded.json
+  catalog/packages/minecraft.json
+  catalog/packages/palworld.json
+  catalog/packages/satisfactory.json
+  catalog/packages/sons-of-the-forest.json
+  catalog/packages/terraria.json
+  catalog/packages/valheim.json
+  CONTRIBUTING.md
   start.sh
   status.sh
   stop.sh
@@ -74,6 +92,7 @@ REQUIRED_RELEASE_ARTIFACTS=(
 
 REQUIRED_EXECUTABLE_ARTIFACTS=(
   scripts/release-check.sh
+  scripts/build-profile-catalog.py
   start.sh
   status.sh
   stop.sh
@@ -182,6 +201,7 @@ run_step "Python tests" "$PYTHON_BIN" -m unittest discover -s tests -v
 run_step "Standalone UI tests" "$NODE_BIN" tests/ui.test.js
 run_step "Desktop plugin contract" "$NODE_BIN" tests/desktop_plugin.test.js
 run_step "Hermes-venv bridge tests" "$HERMES_PYTHON" -m unittest tests.test_plugin_api -v
+run_step "Official profile catalog" "$PYTHON_BIN" scripts/build-profile-catalog.py --check
 run_step "JSON Schema validation" check_schemas
 run_step "TypeScript noEmit" "$TSC_BIN" --project tests/tsconfig.desktop-plugin.json --noEmit --pretty false
 run_step "Whitespace errors" "$GIT_BIN" diff --check

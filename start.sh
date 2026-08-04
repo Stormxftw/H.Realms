@@ -9,6 +9,11 @@ LOG="$ROOT/logs/dashboard.log"
 cd "$ROOT"
 mkdir -p logs data
 
+LOCAL_ADAPTER_CONFIG="$ROOT/data/local-game-adapters.json"
+if [[ -z "${GAME_HOST_ADAPTER_CONFIG:-}" && -f "$LOCAL_ADAPTER_CONFIG" ]]; then
+  export GAME_HOST_ADAPTER_CONFIG="$LOCAL_ADAPTER_CONFIG"
+fi
+
 if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
   echo "Hermes Game Host Console is already healthy on http://127.0.0.1:$PORT"
   ./status.sh || true

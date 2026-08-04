@@ -18,7 +18,9 @@ from unittest import mock
 PLUGIN_DIR = Path(__file__).parents[1] / "hermes-plugin" / "dashboard"
 MODULE_PATH = PLUGIN_DIR / "plugin_api.py"
 PLUGIN_PREFIX = "/api/plugins/game-host-console"
-HERMES_AGENT_ROOT = Path("/path/to/hermes-agent")
+HERMES_AGENT_ROOT = Path(
+    os.environ.get("HERMES_AGENT_ROOT", Path.home() / ".hermes" / "hermes-agent")
+)
 
 
 def load_plugin_api(module_path=MODULE_PATH):

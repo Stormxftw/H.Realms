@@ -162,6 +162,9 @@ function operationSucceeded(operation) {
  * @property {string} [readiness]
  * @property {boolean} [projectPresent]
  * @property {boolean} [installed]
+ * @property {string} [version]
+ * @property {string[]} [tags]
+ * @property {string} [source]
  * @property {{ message?: string }[]} [blockers]
  * @property {{ message?: string }[]} [hints]
  * @property {Control[]} [controls]
@@ -551,7 +554,7 @@ function createGameHostPage(ctx, runtime) {
     })
     const storeQuery = useQuery({
       queryKey: [ctx.source, 'store'],
-      queryFn: () => /** @type {Promise<{ store: Game[], installed: string[] }>} */ (
+      queryFn: () => /** @type {Promise<{ store: Game[], installed: string[], catalogWarning?: string }>} */ (
         ctx.rest('/proxy/api/store')
       ),
       refetchInterval: 30_000,
@@ -711,19 +714,28 @@ function createGameHostPage(ctx, runtime) {
 
     /** @param {string} gameId */
     async function handleInstall(gameId) {
-      await installMutation.mutateAsync({ gameId })
+      const result = /** @type {{ restartRequired?: boolean }} */ (await installMutation.mutateAsync({ gameId }))
+      await refreshStore()
+      if (result.restartRequired) {
+        host.notify({ kind: 'warning', message: 'Verified profile installed. Restart Game Host Console once to activate it.' })
+        return
+      }
       setShowStore(false)
       selectGame(gameId)
-      await refreshStore()
       host.notify({ kind: 'success', message: 'Added to your console. Provision server files to start it.' })
     }
 
     /** @param {string} gameId */
     async function handleUninstall(gameId) {
-      await uninstallMutation.mutateAsync({ gameId })
+      const result = /** @type {{ restartRequired?: boolean }} */ (await uninstallMutation.mutateAsync({ gameId }))
       if (selectedGameId === gameId) setSelectedGameId('')
       await refreshStore()
-      host.notify({ kind: 'success', message: 'Removed from your console (server files kept).' })
+      host.notify({
+        kind: result.restartRequired ? 'warning' : 'success',
+        message: result.restartRequired
+          ? 'Removed from your console. Restart Game Host Console once to deactivate the downloaded profile.'
+          : 'Removed from your console (server files kept).',
+      })
     }
 
     /** @param {Control} control @param {ControlValue} value */
@@ -974,7 +986,11 @@ function createGameHostPage(ctx, runtime) {
         style: { ...panelStyle, padding: '16px' },
         children: [
           jsx('h2', { className: 'text-sm font-semibold', children: 'Available to add' }, 'title'),
-          jsx('p', { className: 'mt-1 text-xs leading-5 text-muted-foreground', children: 'Adding a game creates its project home here. Provision the server files afterwards with the Hermes game-host skill or manual setup.' }, 'sub'),
+          jsx('p', { className: 'mt-1 text-xs leading-5 text-muted-foreground', children: 'Profiles come from the official GitHub catalog after pull-request verification. Adding one creates its local project home; newly downloaded profiles activate after one service restart.' }, 'sub'),
+          storeQuery.data?.catalogWarning ? jsx('p', {
+            className: 'mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200',
+            children: `Catalog fallback active: ${storeQuery.data.catalogWarning}`,
+          }, 'warning') : null,
           storeItems.length === 0
             ? jsx('p', { className: 'mt-3 text-sm text-muted-foreground', children: 'Every supported game is already installed.' }, 'empty')
             : jsx('div', {
@@ -990,6 +1006,7 @@ function createGameHostPage(ctx, runtime) {
                           className: 'min-w-0',
                           children: [
                             jsx('h4', { className: 'text-sm font-semibold', children: item.name }, 'name'),
+                            item.version ? jsx('p', { className: 'mt-1 text-[11px] uppercase tracking-wide text-muted-foreground', children: `Official catalog · v${item.version}` }, 'version') : null,
                             item.description ? jsx('p', { className: 'mt-1 text-xs leading-5 text-muted-foreground', children: item.description }, 'desc') : null,
                           ],
                         }, 'copy'),
