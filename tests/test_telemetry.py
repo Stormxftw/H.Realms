@@ -85,6 +85,73 @@ class TelemetryTests(unittest.TestCase):
 
             self.assertEqual(123, pid)
 
+    def test_process_probe_reports_procfs_uptime_and_resident_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc_root = Path(tmp)
+            process = proc_root / "123"
+            process.mkdir()
+            (process / "cmdline").write_bytes(
+                b"/srv/PalServer-Linux-Shipping\x00Pal\x00-port=8211\x00"
+            )
+            stat_fields = ["0"] * 52
+            stat_fields[0] = "123"
+            stat_fields[1] = "(Pal Server)"
+            stat_fields[2] = "S"
+            stat_fields[21] = "25000"
+            (process / "stat").write_text(" ".join(stat_fields), encoding="utf-8")
+            (process / "status").write_text(
+                "Name:\tPalServer\nVmRSS:\t2048000 kB\n",
+                encoding="utf-8",
+            )
+            (proc_root / "uptime").write_text("400.00 100.00\n", encoding="utf-8")
+
+            result = telemetry.probe_process(
+                "PalServer-Linux-Shipping",
+                proc_root=proc_root,
+                clock_ticks_per_second=100,
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["running"])
+            self.assertEqual(123, result["pid"])
+            self.assertEqual(150, result["uptimeSeconds"])
+            self.assertEqual("2m 30s", result["uptimeHuman"])
+            self.assertEqual(2000.0, result["rssMB"])
+
+    def test_process_probe_keeps_running_state_when_metrics_are_unreadable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc_root = Path(tmp)
+            process = proc_root / "123"
+            process.mkdir()
+            (process / "cmdline").write_bytes(b"PalServer-Linux-Shipping\x00")
+            (process / "stat").write_text("malformed", encoding="utf-8")
+            (process / "status").write_text("VmRSS:\tnot-a-number kB\n", encoding="utf-8")
+            (proc_root / "uptime").write_text("malformed\n", encoding="utf-8")
+
+            result = telemetry.probe_process(
+                "PalServer-Linux-Shipping",
+                proc_root=proc_root,
+                clock_ticks_per_second=100,
+            )
+
+            self.assertEqual(
+                {"ok": True, "running": True, "pid": 123, "error": None},
+                result,
+            )
+
+    def test_process_probe_does_not_add_metrics_when_process_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = telemetry.probe_process(
+                "PalServer-Linux-Shipping",
+                proc_root=Path(tmp),
+                clock_ticks_per_second=100,
+            )
+
+            self.assertEqual(
+                {"ok": True, "running": False, "pid": None, "error": None},
+                result,
+            )
+
     def test_listener_probe_uses_declared_transport_and_keeps_errors(self):
         calls = []
 

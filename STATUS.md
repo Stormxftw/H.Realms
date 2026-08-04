@@ -1,7 +1,7 @@
 # Hermes Game Host Console Status
 
 - Status: **Working MVP — Desktop loader and authenticated bridge repaired; live controls, backups, and diagnostics verified**
-- Latest verification: `2026-08-03 EDT` — Palworld remained `running_ready`; Desktop rendered the live 113.49 MB verified backup and approved diagnostics logs; full suite green (**190 passed, 202 subtests**).
+- Latest verification: `2026-08-03 EDT` — Palworld remained `running_ready`; Desktop rendered the live verified backup and approved diagnostics logs; process telemetry now reports uptime and RSS memory; full suite green (**193 passed, 202 subtests**).
 
 ## UI Wiring (August 2026 update)
 - Desktop plugin surfaces **Backups** (list, create, preview restore, execute with exact token confirmation) and **Diagnostics** (log list, redacted tail, bundle).
@@ -27,6 +27,7 @@
 - **Installed vs Store model** — the sidebar shows only games you have *installed*; the rest live in the **Store** until you add them (from the Store UI or via the Hermes `game-host-console` skill). Seeded on first run from what is present/running.
 - **Accurate live status** — a running process whose listeners are listening reports `RUNNING`, even if setup blockers are pending (setup gates *mutations*, not runtime health)
 - **Player counts** — Minecraft, Source (A2S) and Palworld REST show live `players`; Palworld reads its authenticated REST API (`RESTAPIEnabled=True` on 8212), resolving the AdminPassword + ServerPlayerMaxNum from `PalWorldSettings.ini` via `/proc/<pid>/cwd`
+- **Process uptime and memory** — Linux collectors read `/proc/<pid>/stat`, `/proc/uptime`, and `VmRSS` from `/proc/<pid>/status`; metrics fail soft if the process exits or procfs becomes unreadable
 - **Backup & diagnostics endpoints** — wired the previously-dormant `backups.py` + `diagnostics.py` modules:
   - `GET  /api/backups/<gameId>` — verified artifact inventory
   - `POST /api/backups/<gameId>/create` — one verified `.tar.gz` of the game's approved source
