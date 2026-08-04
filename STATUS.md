@@ -1,9 +1,21 @@
 # Hermes Game Host Console Status
 
-- Status: **Working MVP — Installed/Store model + accurate live status + live player counts + backup & diagnostics endpoints**
-- Latest verification: `2026-08-03 EDT` — wired `backups.py` + `diagnostics.py` as guarded endpoints; real Palworld backup created (118 MB, 567 entries, valid); full suite green (189 passed, 184 subtests)
+- Status: **Working MVP — Desktop loader and authenticated bridge repaired; live controls, backups, and diagnostics verified**
+- Latest verification: `2026-08-03 EDT` — Palworld remained `running_ready`; Desktop rendered the live 113.49 MB verified backup and approved diagnostics logs; full suite green (**190 passed, 202 subtests**).
+
+## UI Wiring (August 2026 update)
+- Desktop plugin surfaces **Backups** (list, create, preview restore, execute with exact token confirmation) and **Diagnostics** (log list, redacted tail, bundle).
+- Root loader failure fixed: the Desktop plugin is once again a single-file ESM module with no unresolved relative imports.
+- Root bridge failure fixed: the authenticated proxy narrowly allows the typed backup/restore/diagnostics routes, bounded bodies/responses, and only `redact=true|false` on concrete log-tail routes.
+- The installer now backs up and removes the legacy `game-host-console.disabled` directory from the live scan root; renaming a plugin directory inside `desktop-plugins/` does not disable it.
+- Backup and restore use dedicated guarded flows and Hermes `ConfirmDialog`; native `window.confirm` is not used.
+- UI styling inherits Hermes SDK components and `--ui-*` theme tokens.
+- Installed source and live plugin hashes were verified identical.
+- Static web UI (standalone/bridge) remains functional for core controls; backup/diagnostics panels are currently Desktop-first.
+- After bridge-source changes, fully restart Hermes Desktop so its local API process reloads the Python plugin module.
+
 - Product/add-on name: `Hermes Game Host Console`
-- Version: backend `HermesGameHostConsole/0.4`, plugin `0.3.0`
+- Version: backend `HermesGameHostConsole/0.4`, plugin `0.2.0`
 - Port: `5057` (loopback only by default)
 - Local URL: `http://127.0.0.1:5057`
 - Hermes Desktop route: `/game-host`
@@ -51,7 +63,7 @@
 ### Notes / requirements
 - Live Palworld player counts require enabling the server's REST API: `RESTAPIEnabled=True`, `bShowPlayerList=True` in `PalWorldSettings.ini`, then a server restart. RCON is off and not used.
 - Install creates only the project home + `PROVISION.md`; actual server files/scripts are provisioned via the Hermes skill or manual setup.
-- After reinstalling the plugin, reload Desktop plugins from the command palette and restart the Hermes gateway to pick up the new bridge routes.
+- After reinstalling the plugin, fully restart Hermes Desktop to reload both its disk plugin and local authenticated bridge module.
 
 ## New in Wave 2 (July 30, 2026)
 

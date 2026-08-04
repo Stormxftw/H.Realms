@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 BACKEND_TARGET="$HERMES_HOME/plugins/game-host-console/dashboard"
 DESKTOP_TARGET="$HERMES_HOME/desktop-plugins/game-host-console"
+LEGACY_DISABLED_TARGET="$HERMES_HOME/desktop-plugins/game-host-console.disabled"
 BACKUP_ROOT="$ROOT/.install-backups"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP="$BACKUP_ROOT/$STAMP"
@@ -17,6 +18,11 @@ fi
 if [[ -d "$DESKTOP_TARGET" ]]; then
   mkdir -p "$BACKUP/desktop"
   cp -a "$DESKTOP_TARGET/." "$BACKUP/desktop/"
+fi
+if [[ -d "$LEGACY_DISABLED_TARGET" ]]; then
+  mkdir -p "$BACKUP/legacy-disabled-desktop"
+  cp -a "$LEGACY_DISABLED_TARGET/." "$BACKUP/legacy-disabled-desktop/"
+  rm -rf -- "$LEGACY_DISABLED_TARGET"
 fi
 
 mkdir -p "$BACKEND_TARGET/dist" "$BACKEND_TARGET/web" "$DESKTOP_TARGET"
